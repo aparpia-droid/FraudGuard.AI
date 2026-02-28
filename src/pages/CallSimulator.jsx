@@ -100,7 +100,7 @@ const CallSimulator = () => {
     return (
       <div className="call-simulator-container">
         <div className="scenario-selection">
-          <h2>Select a Scam Call Scenario</h2>
+          <h2>Select your Scam Call Scenario</h2>
           <p>Choose which specific scenario you'd like to practice</p>
 
           <div className="scenario-grid">
