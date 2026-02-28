@@ -2,11 +2,11 @@
   "name": "fraudguard-ai",
   "private": true,
   "workspaces": [
-    "web",
-    "api"
+    "frontend",
+    "backend"
   ],
   "scripts": {
-    "dev": "concurrently \"npm run dev --workspace=web\" \"npm run dev --workspace=api\"",
+    "dev": "concurrently \"npm run dev --workspace=frontend\" \"npm run dev --workspace=backend\"",
     "build": "npm run build --workspaces",
     "install:all": "npm install"
   },

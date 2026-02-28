@@ -1,6 +1,6 @@
 # FraudGuard.AI
 
-FraudGuard.AI is a scam-call simulation and debrief app. This repo contains the monorepo (web + api).
+FraudGuard.AI is a scam-call simulation and debrief app. This repo contains the monorepo (frontend + backend).
 
 ## Tech Stack
 
@@ -20,7 +20,7 @@ npm run install:all
 npm install
 ```
 
-This installs dependencies for the root workspace and for `web` and `api`.
+This installs dependencies for the root workspace and for `frontend` and `backend`.
 
 ## How to Run Locally
 
