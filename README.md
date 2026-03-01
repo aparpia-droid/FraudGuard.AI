@@ -24,16 +24,22 @@ This installs dependencies for the root workspace and for `frontend` and `backen
 
 ## How to Run Locally
 
-1. Copy environment variables:
+1. Install all deps:
+   ```bash
+   npm run install:all
+   ```
+2. Copy environment variables:
    ```bash
    cp .env.example .env
    ```
-2. Start both frontend and backend:
+3. Start both frontend and backend:
    ```bash
    npm run dev
    ```
    - Frontend: http://localhost:5173
    - API: http://localhost:8080
+
+   If Twilio creds are set in `.env`, starting a session places a real outbound call to the phone number.
 
 3. **Optional:** Use the Home page to enter a phone number, pick a scenario, and click Start. You’ll be taken to the Live page (streaming transcript), then after 10 seconds to the Debrief page (score + transcript + risk label).
 
