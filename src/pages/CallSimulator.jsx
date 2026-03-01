@@ -69,26 +69,11 @@ const CallSimulator = () => {
 
       console.log('Initiating call to:', formattedPhone);
 
-      // Map frontend scenario IDs to backend scenario IDs
-      // Backend expects: social_security, apple_support, or lottery
-      let backendScenarioId = scenario.category; // Use category as default
-
-      // If the scenario ID itself is already one of the backend IDs, use it
-      if (['social_security', 'apple_support', 'lottery'].includes(scenario.id)) {
-        backendScenarioId = scenario.id;
-      } else if (scenario.category === 'tech_support' && scenario.id === 'apple_support') {
-        backendScenarioId = 'apple_support';
-      } else if (scenario.category === 'tech_support') {
-        // Map other tech_support scenarios to apple_support agent
-        backendScenarioId = 'apple_support';
-      }
-
-      const response = await axios.post(`${API_URL}/start-call`, {
-        phoneNumber: formattedPhone,
-        scenarioId: backendScenarioId
+      const response = await axios.post(`${API_URL}/dev-call`, {
+        phoneNumber: formattedPhone
       });
 
-      if (response.data.success) {
+      if (response.data.ok) {
         setSessionId(response.data.sessionId);
         setCallInitiated(true);
         console.log('Call initiated successfully. Session ID:', response.data.sessionId);
