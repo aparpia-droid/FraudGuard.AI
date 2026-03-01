@@ -14,7 +14,7 @@ const Login = () => {
   const { login, setScamType } = useApp();
   const navigate = useNavigate();
 
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
   const formatPhoneNumber = (value) => {
     const phoneNumber = value.replace(/\D/g, '');
@@ -192,7 +192,8 @@ const Login = () => {
                   <span className="scam-icon">🎁</span>
                   <span className="scam-label">Lottery / Giveaway</span>
                 </button>
-                <button
+                {/* Voice Impersonation - Commented out for now */}
+                {/* <button
                   type="button"
                   className={`scam-type-btn ${selectedScamType === 'voice_impersonation' ? 'selected' : ''}`}
                   onClick={() => handleScamTypeSelect('voice_impersonation')}
@@ -200,7 +201,7 @@ const Login = () => {
                 >
                   <span className="scam-icon">🎭</span>
                   <span className="scam-label">Voice Impersonation</span>
-                </button>
+                </button> */}
               </div>
               {error && <span className="error-message">{error}</span>}
             </div>
