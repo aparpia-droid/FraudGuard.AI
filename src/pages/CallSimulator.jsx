@@ -68,9 +68,11 @@ const CallSimulator = () => {
       const formattedPhone = `+1${digitsOnly}`;
 
       console.log('Initiating call to:', formattedPhone);
+      console.log('Scenario ID:', scenario.id);
 
       const response = await axios.post(`${API_URL}/dev-call`, {
-        phoneNumber: formattedPhone
+        phoneNumber: formattedPhone,
+        scenarioId: scenario.id
       });
 
       if (response.data.ok) {

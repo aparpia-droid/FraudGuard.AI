@@ -43,7 +43,36 @@ const client = twilio(
   process.env.TWILIO_AUTH_TOKEN
 );
 
-const sessions = {}; // sessionId -> { phoneNumber, stage, transcript }
+const sessions = {}; // sessionId -> { phoneNumber, stage, transcript, scenarioId, agentId }
+
+// Map scenario IDs to the appropriate ElevenLabs agent
+function getAgentIdForScenario(scenarioId) {
+  console.log('🎯 Selecting agent for scenario:', scenarioId);
+
+  // Map scenarios to their respective agents
+  const scenarioAgentMap = {
+    // Social Security scenarios
+    'social_security': process.env.AGENT_SOCIAL_SECURITY,
+    'medicare_scam': process.env.AGENT_SOCIAL_SECURITY,
+
+    // Tech Support scenarios
+    'tech_support': process.env.AGENT_APPLE_SUPPORT,
+    'apple_support': process.env.AGENT_APPLE_SUPPORT,
+
+    // Lottery / Giveaway scenarios
+    'lottery_winner': process.env.AGENT_LOTTERY,
+    'free_cruise': process.env.AGENT_LOTTERY,
+
+    // Voice Impersonation scenarios - fallback to default agent
+    'grandchild_emergency': process.env.ELEVEN_AGENT_ID,
+    'boss_impersonation': process.env.ELEVEN_AGENT_ID,
+  };
+
+  const agentId = scenarioAgentMap[scenarioId] || process.env.ELEVEN_AGENT_ID;
+  console.log('✅ Selected agent:', agentId);
+
+  return agentId;
+}
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
@@ -72,16 +101,24 @@ async function getElevenSignedUrl(agentId) {
 app.post('/send-code', async (req, res) => {
   const { phoneNumber } = req.body;
 
-  if (!phoneNumber) return res.status(400).json({ error: "phoneNumber required" });
+  console.log('📱 SEND-CODE REQUEST:', { phoneNumber });
+
+  if (!phoneNumber) {
+    console.log('❌ Missing phoneNumber');
+    return res.status(400).json({ error: "phoneNumber required" });
+  }
 
   try {
+    console.log('🔄 Sending verification code via Twilio...');
     await client.verify.v2
       .services(process.env.TWILIO_VERIFY_SERVICE_SID)
       .verifications
       .create({ to: phoneNumber, channel: 'sms' });
 
+    console.log('✅ Verification code sent successfully');
     res.json({ success: true });
   } catch (err) {
+    console.log('❌ Send-code error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -89,8 +126,17 @@ app.post('/send-code', async (req, res) => {
 app.post('/verify-code', async (req, res) => {
   const { phoneNumber, code } = req.body;
 
+  console.log('📞 VERIFY-CODE REQUEST:', { phoneNumber, code });
+
   if (!phoneNumber || !code) {
+    console.log('❌ Missing phoneNumber or code');
     return res.status(400).json({ error: "phoneNumber and code required" });
+  }
+
+  // DEV MODE: Accept code "123456" to bypass Twilio rate limits during testing
+  if (code === '123456') {
+    console.log('✅ DEV MODE: Bypassing Twilio verification with test code');
+    return res.json({ verified: true });
   }
 
   try {
@@ -99,29 +145,16 @@ app.post('/verify-code', async (req, res) => {
       .verificationChecks
       .create({ to: phoneNumber, code });
 
+    console.log('✅ Twilio verification result:', result.status);
+
     if (result.status === 'approved') {
-      const sessionId = uuidv4();
-
-      sessions[sessionId] = {
-        phoneNumber,
-        stage: "GREETING",
-        transcript: []
-      };
-
-
-      await client.calls.create({
-        to: phoneNumber,
-        from: process.env.TWILIO_PHONE_NUMBER,
-        url: `${process.env.BASE_URL}/voice?sessionId=${sessionId}`,
-        method: "POST",
-      });
-
-      return res.json({ verified: true, sessionId });
+      return res.json({ verified: true });
     }
 
     return res.json({ verified: false, status: result.status });
 
   } catch (err) {
+    console.log('❌ Verification error:', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -261,11 +294,19 @@ async function pcm16kB64_to_mulaw8kB64(b64) {
 app.post("/dev-call", async (req, res) => {
   console.log("=== HIT /dev-call ===", req.body);
 
-  const { phoneNumber } = req.body;
+  const { phoneNumber, scenarioId } = req.body;
   if (!phoneNumber) return res.status(400).json({ error: "phoneNumber required" });
 
   const sessionId = uuidv4();
-  sessions[sessionId] = { phoneNumber, stage: "GREETING", transcript: [] };
+  const agentId = scenarioId ? getAgentIdForScenario(scenarioId) : process.env.ELEVEN_AGENT_ID;
+
+  sessions[sessionId] = {
+    phoneNumber,
+    scenarioId,
+    agentId,
+    stage: "GREETING",
+    transcript: []
+  };
 
   try {
     const call = await client.calls.create({
@@ -309,10 +350,19 @@ const wss = new WebSocket.Server({ server, path: "/twilio/stream" });
 wss.on("connection", (twilioWs, req) => {
   console.log("✅ Twilio WS connected:", req.url);
 
+  // Extract sessionId from URL query parameters
+  const url = new URL(req.url, `http://localhost`);
+  const sessionId = url.searchParams.get('sessionId');
+  console.log('📋 Session ID from WS URL:', sessionId);
+
+  // Get agentId from session, fallback to default
+  const session = sessions[sessionId];
+  const agentId = session?.agentId || process.env.ELEVEN_AGENT_ID;
+  console.log('🎭 Using agent ID:', agentId, 'for scenario:', session?.scenarioId);
+
   let streamSid = null;
   let elevenWs = null;
 
-  console.log("ELEVEN_AGENT_ID present?", !!process.env.ELEVEN_AGENT_ID, "value:", process.env.ELEVEN_AGENT_ID);
   console.log("ELEVEN_API_KEY present?", !!process.env.ELEVENLABS_API_KEY, "len:", (process.env.ELEVENLABS_API_KEY || "").length);
   console.log("➡️ About to fetch Eleven signed URL...");
 
@@ -454,8 +504,8 @@ function startTranscoders({ elevenInRate, elevenOutRate }) {
   (async () => {
   try {
 
-    const signedUrl = await getElevenSignedUrl(process.env.ELEVEN_AGENT_ID);
-    console.log("✅ Got signed URL:", signedUrl.slice(0, 60), "...");
+    const signedUrl = await getElevenSignedUrl(agentId);
+    console.log("✅ Got signed URL for agent", agentId, ":", signedUrl.slice(0, 60), "...");
 
     elevenWs = new WebSocket(signedUrl);
 

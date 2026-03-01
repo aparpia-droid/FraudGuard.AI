@@ -52,24 +52,10 @@ const Login = () => {
       return;
     }
 
-    // Send verification code
-    setLoading(true);
-    setError('');
-
-    try {
-      const formattedPhone = `+1${digitsOnly}`;
-      await axios.post(`${API_URL}/send-code`, {
-        phoneNumber: formattedPhone
-      });
-
-      // Move to verification step
-      setStep(2);
-      setLoading(false);
-    } catch (err) {
-      console.error('Error sending code:', err);
-      setError('Failed to send verification code. Please try again.');
-      setLoading(false);
-    }
+    // Skip verification and go directly to dashboard
+    login(phoneNumber);
+    setScamType(selectedScamType);
+    navigate('/dashboard');
   };
 
   const handleVerifyCode = async (e) => {
@@ -207,7 +193,7 @@ const Login = () => {
             </div>
 
             <button type="submit" className="btn-primary" disabled={loading}>
-              {loading ? 'Sending Code...' : 'Send Verification Code'}
+              {loading ? 'Starting...' : 'Start Simulation'}
             </button>
           </form>
         ) : (

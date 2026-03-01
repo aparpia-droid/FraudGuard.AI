@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { callScenarios, emailScenarios } from '../data/scamScenarios';
+import { callScenarios } from '../data/scamScenarios';
 import './Dashboard.css';
 
 const Dashboard = () => {
@@ -22,10 +22,6 @@ const Dashboard = () => {
     navigate('/call-simulator');
   };
 
-  const handleStartEmail = () => {
-    navigate('/email-simulator');
-  };
-
   const handleLogout = () => {
     logout();
     navigate('/');
@@ -39,10 +35,6 @@ const Dashboard = () => {
   const filteredCallScenarios = selectedScamType
     ? callScenarios.filter(scenario => scenario.category === selectedScamType)
     : callScenarios;
-
-  const filteredEmailScenarios = selectedScamType
-    ? emailScenarios.filter(scenario => scenario.category === selectedScamType)
-    : emailScenarios;
 
   // Get scam type display name
   const getScamTypeName = () => {
@@ -117,25 +109,6 @@ const Dashboard = () => {
 
               <button onClick={handleStartCall} className="btn-start btn-call">
                 Start Call Simulation
-              </button>
-            </div>
-
-            <div className="simulator-card">
-              <div className="card-icon">📧</div>
-              <h4>Scam Email Simulator</h4>
-              <p>Learn to identify phishing emails and make safe decisions. Review suspicious emails and choose the right actions to protect yourself.</p>
-
-              <div className="scenarios-list">
-                <strong>Scenarios available:</strong>
-                <ul>
-                  {filteredEmailScenarios.map(scenario => (
-                    <li key={scenario.id}>{scenario.name}</li>
-                  ))}
-                </ul>
-              </div>
-
-              <button onClick={handleStartEmail} className="btn-start btn-email">
-                Start Email Simulation
               </button>
             </div>
           </div>

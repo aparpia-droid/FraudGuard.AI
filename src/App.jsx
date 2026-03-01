@@ -3,7 +3,6 @@ import { AppProvider } from './context/AppContext';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import CallSimulator from './pages/CallSimulator';
-import EmailSimulator from './pages/EmailSimulator';
 import Results from './pages/Results';
 import './App.css';
 
@@ -15,7 +14,6 @@ function App() {
           <Route path="/" element={<Login />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/call-simulator" element={<CallSimulator />} />
-          <Route path="/email-simulator" element={<EmailSimulator />} />
           <Route path="/results" element={<Results />} />
         </Routes>
       </Router>
