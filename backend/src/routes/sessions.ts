@@ -10,6 +10,7 @@ import {
   getSession as getStoredSession,
 } from '../sessionStore.js'
 import { computeScore, getRiskLabel } from '../scoring.js'
+import { placeOutboundCall } from '../twilio.js'
 
 const router = Router()
 
@@ -24,14 +25,20 @@ const MOCK_TRANSCRIPT = [
 /** Mock: no sensitive data detected — high score. Later: run Groq (or other NLP) on transcript to detect PII and pass to computeScore. */
 const MOCK_DETECTED: import('../scoring.js').SensitiveType[] = []
 
-router.post('/start', (req: Request, res: Response) => {
+router.post('/start', async (req: Request, res: Response) => {
   const { phoneNumber, scenarioId } = req.body ?? {}
   if (!phoneNumber || !scenarioId) {
     res.status(400).json({ error: 'phoneNumber and scenarioId required' })
     return
   }
   const session = createSession(String(phoneNumber), String(scenarioId))
-  res.json({ sessionId: session.sessionId })
+  const digits = String(phoneNumber).replace(/\D/g, '')
+  const to = digits.length === 10 ? `+1${digits}` : digits.length === 11 && digits.startsWith('1') ? `+${digits}` : String(phoneNumber)
+  const callSid = await placeOutboundCall(to, session.sessionId)
+  res.json({
+    sessionId: session.sessionId,
+    callPlaced: Boolean(callSid),
+  })
 })
 
 router.get('/:sessionId', (req: Request, res: Response) => {
