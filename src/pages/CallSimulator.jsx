@@ -19,7 +19,7 @@ const CallSimulator = () => {
   const [callInitiated, setCallInitiated] = useState(false);
   const messagesEndRef = useRef(null);
 
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
   useEffect(() => {
     startSimulation('call');
@@ -69,10 +69,23 @@ const CallSimulator = () => {
 
       console.log('Initiating call to:', formattedPhone);
 
+      // Map frontend scenario IDs to backend scenario IDs
+      // Backend expects: social_security, apple_support, or lottery
+      let backendScenarioId = scenario.category; // Use category as default
+
+      // If the scenario ID itself is already one of the backend IDs, use it
+      if (['social_security', 'apple_support', 'lottery'].includes(scenario.id)) {
+        backendScenarioId = scenario.id;
+      } else if (scenario.category === 'tech_support' && scenario.id === 'apple_support') {
+        backendScenarioId = 'apple_support';
+      } else if (scenario.category === 'tech_support') {
+        // Map other tech_support scenarios to apple_support agent
+        backendScenarioId = 'apple_support';
+      }
+
       const response = await axios.post(`${API_URL}/start-call`, {
         phoneNumber: formattedPhone,
-        scenarioId: scenario.id,
-        scenarioName: scenario.name
+        scenarioId: backendScenarioId
       });
 
       if (response.data.success) {
