@@ -1,93 +1,87 @@
 require('dotenv').config();
+console.log("ELEVEN KEY PRESENT:", !!process.env.ELEVENLABS_API_KEY, "LEN:", (process.env.ELEVENLABS_API_KEY || "").length);
+console.log("ELEVEN KEY PREFIX:", (process.env.ELEVENLABS_API_KEY || "").slice(0, 6));
+
+process.on("unhandledRejection", (reason) => {
+  console.error("UNHANDLED REJECTION:", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+
+
 const express = require('express');
 const cors = require('cors');
-const { v4: uuidv4 } = require('uuid');
 const twilio = require('twilio');
+const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
+const http = require("http");
+const WebSocket = require("ws");
+const { spawn } = require("child_process");
+const prism = require("prism-media");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// Logging middleware
 app.use((req, res, next) => {
   console.log(req.method, req.url);
   next();
 });
 
-// Twilio client for SMS verification
-const twilioClient = twilio(
+const AUDIO_DIR = path.join(__dirname, 'audio_cache');
+if (!fs.existsSync(AUDIO_DIR)) fs.mkdirSync(AUDIO_DIR);
+
+app.use('/audio', express.static(AUDIO_DIR)); // Twilio will fetch MP3s here
+
+const client = twilio(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
 );
 
-// Map scenarios to ElevenLabs agent IDs
-const SCENARIO_AGENTS = {
-  'social_security': process.env.AGENT_SOCIAL_SECURITY,
-  'apple_support': process.env.AGENT_APPLE_SUPPORT,
-  'lottery': process.env.AGENT_LOTTERY,
-};
-
-// Scenario display info
-const SCENARIO_INFO = {
-  'social_security': {
-    name: 'Social Security Suspension',
-    description: 'A government official claims your benefits are about to be suspended.',
-    difficulty: 'Hard',
-    tactics: ['Authority impersonation', 'Urgency', 'Legal threats'],
-  },
-  'apple_support': {
-    name: 'Apple Tech Support',
-    description: 'A technician claims your iCloud account has been compromised.',
-    difficulty: 'Medium',
-    tactics: ['Technical jargon', 'Fear of data loss', 'Remote access'],
-  },
-  'lottery': {
-    name: 'Lottery / Giveaway',
-    description: 'You\'ve won $25,000 and a MacBook Pro. Just pay a small fee to claim.',
-    difficulty: 'Easy',
-    tactics: ['Excitement', 'Too good to be true', 'Processing fees'],
-  },
-};
-
-// In-memory session store
-const sessions = {};
-
-// ============ HEALTH CHECK ============
+const sessions = {}; // sessionId -> { phoneNumber, stage, transcript }
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
-// ============ GET SCENARIOS ============
-
-app.get('/scenarios', (req, res) => {
-  const scenarios = Object.entries(SCENARIO_INFO).map(([id, info]) => ({
-    id,
-    ...info,
-  }));
-  res.json(scenarios);
+app.post("/twilio-stream-status", (req, res) => {
+  console.log("📡 STREAM STATUS CALLBACK:", req.body);
+  res.sendStatus(200);
 });
 
-// ============ SMS VERIFICATION ============
+async function getElevenSignedUrl(agentId) {
+  const url = `https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${agentId}`;
+  const resp = await axios.get(url, {
+    headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY },
+    timeout: 15000, // 15s hard timeout so it never hangs silently
+    validateStatus: () => true,
+  });
+
+  if (resp.status !== 200) {
+    throw new Error(`Eleven signed-url failed: ${resp.status} ${JSON.stringify(resp.data)}`);
+  }
+  if (!resp.data?.signed_url) {
+    throw new Error(`Eleven signed-url missing signed_url: ${JSON.stringify(resp.data)}`);
+  }
+  return resp.data.signed_url;
+}
 
 app.post('/send-code', async (req, res) => {
   const { phoneNumber } = req.body;
 
-  console.log('Received send-code request for:', phoneNumber);
-
-  if (!phoneNumber) {
-    return res.status(400).json({ error: 'phoneNumber required' });
-  }
+  if (!phoneNumber) return res.status(400).json({ error: "phoneNumber required" });
 
   try {
-    const verification = await twilioClient.verify.v2
+    await client.verify.v2
       .services(process.env.TWILIO_VERIFY_SERVICE_SID)
       .verifications
       .create({ to: phoneNumber, channel: 'sms' });
 
-    console.log('Verification sent:', verification.status);
     res.json({ success: true });
   } catch (err) {
-    console.error('Error sending code:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -95,361 +89,464 @@ app.post('/send-code', async (req, res) => {
 app.post('/verify-code', async (req, res) => {
   const { phoneNumber, code } = req.body;
 
-  console.log('Received verify-code request');
-
   if (!phoneNumber || !code) {
-    return res.status(400).json({ error: 'phoneNumber and code required' });
+    return res.status(400).json({ error: "phoneNumber and code required" });
   }
 
   try {
-    const result = await twilioClient.verify.v2
+    const result = await client.verify.v2
       .services(process.env.TWILIO_VERIFY_SERVICE_SID)
       .verificationChecks
       .create({ to: phoneNumber, code });
 
-    console.log('Verification result:', result.status);
-
     if (result.status === 'approved') {
-      return res.json({ verified: true });
+      const sessionId = uuidv4();
+
+      sessions[sessionId] = {
+        phoneNumber,
+        stage: "GREETING",
+        transcript: []
+      };
+
+
+      await client.calls.create({
+        to: phoneNumber,
+        from: process.env.TWILIO_PHONE_NUMBER,
+        url: `${process.env.BASE_URL}/voice?sessionId=${sessionId}`,
+        method: "POST",
+      });
+
+      return res.json({ verified: true, sessionId });
     }
 
     return res.json({ verified: false, status: result.status });
+
   } catch (err) {
-    console.error('Error verifying code:', err.message);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
 
-// ============ TRIGGER THE CALL ============
+app.all("/voice", (req, res) => {
+  const sessionId = req.query.sessionId || uuidv4();
 
-app.post('/start-call', async (req, res) => {
-  const { phoneNumber, scenarioId } = req.body;
-
-  console.log('Received start-call request');
-  console.log('Phone Number:', phoneNumber);
-  console.log('Scenario:', scenarioId);
-
-  if (!phoneNumber || !scenarioId) {
-    return res.status(400).json({ error: 'phoneNumber and scenarioId required' });
+  if (!sessions[sessionId]) {
+    sessions[sessionId] = { stage: "GREETING", transcript: [] };
   }
 
-  const agentId = SCENARIO_AGENTS[scenarioId];
-  if (!agentId) {
-    return res.status(400).json({ error: 'Invalid scenario' });
-  }
+  const twiml = new twilio.twiml.VoiceResponse();
 
-  const sessionId = uuidv4();
+  // Optional: a quick audible "beep" / greeting BEFORE streaming
+  // (Keep it short; after <Connect><Stream> Twilio won't run more TwiML until stream ends)
+  twiml.say({ voice: "Polly.Joanna" }, "Connecting.");
 
-  try {
-    const response = await fetch(
-      'https://api.elevenlabs.io/v1/convai/twilio/outbound-call',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'xi-api-key': process.env.ELEVENLABS_API_KEY,
-        },
-        body: JSON.stringify({
-          agent_id: agentId,
-          agent_phone_number_id: process.env.ELEVENLABS_PHONE_NUMBER_ID,
-          to_number: phoneNumber,
-          conversation_initiation_client_data: {
-            dynamic_variables: {
-              session_id: sessionId,
-              scenario: scenarioId,
-            },
-          },
-        }),
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      console.error('ElevenLabs API error:', data);
-      return res.status(response.status).json({ error: data });
-    }
-
-    sessions[sessionId] = {
-      conversationId: data.conversation_id,
-      callSid: data.callSid,
-      phoneNumber,
-      scenarioId,
-      scenarioName: SCENARIO_INFO[scenarioId].name,
-      status: 'calling',
-      startedAt: Date.now(),
-      transcript: null,
-      score: null,
-    };
-
-    console.log(`✓ Call initiated — session: ${sessionId}, conversation: ${data.conversation_id}`);
-
-    res.json({
-      success: true,
-      sessionId,
-      conversationId: data.conversation_id,
+  const connect = twiml.connect();
+    connect.stream({
+      url: `${process.env.WSS_URL}/twilio/stream?sessionId=${encodeURIComponent(sessionId)}`,
+      statusCallback: `${process.env.BASE_URL}/twilio-stream-status`,
+      statusCallbackMethod: "POST",
     });
-  } catch (err) {
-    console.error('Error starting call:', err);
-    res.status(500).json({ error: err.message });
-  }
+
+  res.type("text/xml").send(twiml.toString());
 });
 
-// ============ CHECK CALL STATUS ============
+// Very simple placeholder logic (replace later with ElevenLabs + LLM)
+function generateNextScammerLine(userText, stage) {
+  const t = (userText || "").toLowerCase();
 
-app.get('/session/:sessionId/status', async (req, res) => {
-  const session = sessions[req.params.sessionId];
-  if (!session) {
-    return res.status(404).json({ error: 'Session not found' });
+  // If they resist, reveal simulation and end (per your rules)
+  if (t.includes("scam") || t.includes("call back") || t.includes("official number")) {
+    return "Understood. This was a simulated scam call for cybersecurity training. In real life, never share personal information and always call the official number from a trusted source. Goodbye.";
   }
 
-  if (session.status === 'calling' && session.conversationId) {
-    try {
-      const response = await fetch(
-        `https://api.elevenlabs.io/v1/convai/conversations/${session.conversationId}`,
-        {
-          headers: {
-            'xi-api-key': process.env.ELEVENLABS_API_KEY,
-          },
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.status === 'done' || data.status === 'ended') {
-          session.status = 'completed';
-          session.transcript = data.transcript;
-          session.duration = data.metadata?.call_duration_secs;
-        }
-      }
-    } catch (err) {
-      console.error('Error checking conversation status:', err);
-    }
-  }
-
-  res.json({
-    status: session.status,
-    conversationId: session.conversationId,
-    scenarioName: session.scenarioName,
-    duration: session.duration || null,
-  });
-});
-
-// ============ FETCH TRANSCRIPT ============
-
-app.get('/session/:sessionId/transcript', async (req, res) => {
-  const session = sessions[req.params.sessionId];
-  if (!session || !session.conversationId) {
-    return res.status(404).json({ error: 'Session not found' });
-  }
-
-  if (session.transcript) {
-    return res.json({
-      transcript: session.transcript,
-      status: session.status,
-      duration: session.duration,
-    });
-  }
-
-  try {
-    const response = await fetch(
-      `https://api.elevenlabs.io/v1/convai/conversations/${session.conversationId}`,
-      {
-        headers: {
-          'xi-api-key': process.env.ELEVENLABS_API_KEY,
-        },
-      }
-    );
-
-    if (!response.ok) {
-      const errData = await response.json();
-      console.error('ElevenLabs transcript error:', errData);
-      return res.status(response.status).json({ error: errData });
-    }
-
-    const data = await response.json();
-    session.transcript = data.transcript;
-    session.status = 'completed';
-    session.duration = data.metadata?.call_duration_secs;
-
-    res.json({
-      transcript: data.transcript,
-      status: data.status,
-      duration: session.duration,
-    });
-  } catch (err) {
-    console.error('Error fetching transcript:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ============ SCORE THE CALL (GROQ) ============
-
-app.post('/session/:sessionId/score', async (req, res) => {
-  const session = sessions[req.params.sessionId];
-  if (!session) {
-    return res.status(404).json({ error: 'Session not found' });
-  }
-
-  if (!session.transcript) {
-    try {
-      const response = await fetch(
-        `https://api.elevenlabs.io/v1/convai/conversations/${session.conversationId}`,
-        {
-          headers: {
-            'xi-api-key': process.env.ELEVENLABS_API_KEY,
-          },
-        }
-      );
-      const data = await response.json();
-      session.transcript = data.transcript;
-      session.status = 'completed';
-    } catch (err) {
-      return res.status(400).json({ error: 'Could not fetch transcript' });
-    }
-  }
-
-  if (session.score) {
-    return res.json(session.score);
-  }
-
-  const transcriptText = session.transcript
-    .map(t => `${t.role}: ${t.message}`)
-    .join('\n');
-
-  try {
-    const groqResponse = await fetch(
-      'https://api.groq.com/openai/v1/chat/completions',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: 'llama-3.1-70b-versatile',
-          messages: [
-            {
-              role: 'system',
-              content: `You are analyzing a phone conversation transcript between a simulated scam caller and a person being tested on their scam awareness.
-
-The caller is an AI playing the role of a scammer. The other speaker is the test subject.
-
-Analyze the test subject's responses ONLY. Do not analyze the caller.
-
-For each response from the test subject, identify:
-
-1. PII_DISCLOSURES: Any personal information revealed. For each:
-   - pii_type: one of [first_name, full_name, email, phone_confirmation, employer, home_address, date_of_birth, mothers_maiden_name, last4_ssn, last4_card, security_answers, full_bank_account, full_credit_card, login_credentials, full_ssn, otp_2fa_code]
-   - exact_quote: the exact words said
-   - severity: one of [low, medium, high, critical]
-   - points_lost: first_name=-3, full_name=-5, email=-5, phone_confirmation=-5, employer=-7, home_address=-10, date_of_birth=-10, mothers_maiden_name=-12, last4_ssn=-15, last4_card=-15, security_answers=-20, full_bank_account=-25, full_credit_card=-25, login_credentials=-25, full_ssn=-30, otp_2fa_code=-30
-
-2. BEHAVIORAL_MISTAKES: For each:
-   - behavior_type: one of [gave_info_fast, agreed_transfer_money, agreed_gift_cards, confirmed_fake_url, agreed_download_software, never_questioned_identity, stayed_long_no_challenge]
-   - points_lost: gave_info_fast=-10, agreed_transfer_money=-20, agreed_gift_cards=-20, confirmed_fake_url=-10, agreed_download_software=-15, never_questioned_identity=-10, stayed_long_no_challenge=-5
-
-3. DEFENSIVE_BEHAVIORS: For each:
-   - defense_type: one of [asked_verify_id, callback_official_number, refused_info, asked_if_scam, hung_up_early, called_out_red_flag, asked_for_supervisor]
-   - points_earned: asked_verify_id=+5, callback_official_number=+10, refused_info=+5, asked_if_scam=+3, hung_up_early=+10, called_out_red_flag=+5, asked_for_supervisor=+3
-
-Return ONLY valid JSON. No markdown. No backticks. No explanation. Just the JSON object:
-{
-  "pii_disclosures": [{"pii_type": "", "exact_quote": "", "severity": "", "points_lost": 0}],
-  "behavioral_mistakes": [{"behavior_type": "", "points_lost": 0}],
-  "defensive_behaviors": [{"defense_type": "", "points_earned": 0}],
-  "total_points_lost": 0,
-  "total_points_earned": 0,
-  "final_score": 0,
-  "tier": ""
+  // Keep it short and pushy
+  return "I understand. This will only take ninety seconds. For training purposes, use fake details only. What city and state should I put on the file?";
 }
 
-Score calculation: Start at 100. Add all points_lost (negative numbers). Add all points_earned (positive numbers). Minimum score is 0.
+async function ttsToMp3Url(text) {
+  const voiceId = process.env.ELEVENLABS_VOICE_ID;
+  const modelId = process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
 
-Tier thresholds:
-90-100 = scam_proof
-75-89 = cautious
-60-74 = aware_but_exposed
-40-59 = vulnerable
-20-39 = high_risk
-0-19 = compromised`
-            },
-            {
-              role: 'user',
-              content: `Scenario: ${session.scenarioName}\n\nTranscript:\n${transcriptText}`,
-            },
-          ],
-          temperature: 0.1,
-        }),
-      }
-    );
+  const fileName = `${Date.now()}-${Math.random().toString(16).slice(2)}.mp3`;
+  const filePath = path.join(AUDIO_DIR, fileName);
 
-    const groqData = await groqResponse.json();
+  const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_22050_32`;
 
-    if (!groqResponse.ok) {
-      console.error('Groq API error:', groqData);
-      return res.status(groqResponse.status).json({ error: groqData });
+  const resp = await axios.post(
+    url,
+    {
+      text,
+      model_id: modelId,
+      voice_settings: {
+        stability: 0.35,
+        similarity_boost: 0.85,
+        style: 0.35,
+        use_speaker_boost: true
+      } 
+    },
+    {
+      responseType: 'arraybuffer',
+      headers: {
+        'xi-api-key': process.env.ELEVENLABS_API_KEY,
+        'Content-Type': 'application/json',
+      },
+      timeout: 20000,
     }
+  );
 
-    let rawContent = groqData.choices[0].message.content;
-    rawContent = rawContent.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+  fs.writeFileSync(filePath, resp.data);
 
-    const analysis = JSON.parse(rawContent);
+  return `${process.env.BASE_URL}/audio/${fileName}`;
+}
 
-    session.score = analysis;
-    session.status = 'scored';
-
-    console.log(`Session ${req.params.sessionId} scored: ${analysis.final_score}/100 (${analysis.tier})`);
-
-    res.json(analysis);
+app.get('/test-tts', async (req, res) => {
+  try {
+    const audioUrl = await ttsToMp3Url(
+      "Testing ElevenLabs. This should sound realistic."
+    );
+    res.json({ audioUrl });
   } catch (err) {
-    console.error('Error scoring:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ============ GET FULL SESSION (for debrief screen) ============
-
-app.get('/session/:sessionId', (req, res) => {
-  const session = sessions[req.params.sessionId];
-  if (!session) {
-    return res.status(404).json({ error: 'Session not found' });
-  }
-
-  res.json({
-    sessionId: req.params.sessionId,
-    scenarioId: session.scenarioId,
-    scenarioName: session.scenarioName,
-    status: session.status,
-    conversationId: session.conversationId,
-    startedAt: session.startedAt,
-    duration: session.duration || null,
-    transcript: session.transcript || null,
-    score: session.score || null,
+  console.error("TTS ERROR status:", err.response?.status);
+  console.error("TTS ERROR data:", err.response?.data?.toString?.() || err.response?.data || err.message);
+  res.status(500).json({
+    error: err.message,
+    status: err.response?.status,
+    data: err.response?.data?.toString?.() || err.response?.data
   });
+}
 });
 
-// ============ LEADERBOARD ============
+function runFfmpeg(inputBuf, args) {
+  return new Promise((resolve, reject) => {
+    const ff = spawn("ffmpeg", args, { stdio: ["pipe", "pipe", "pipe"] });
+    const out = [];
+    const err = [];
 
-app.get('/leaderboard', (req, res) => {
-  const entries = Object.entries(sessions)
-    .filter(([_, s]) => s.score)
-    .map(([id, s]) => ({
-      sessionId: id,
-      scenarioName: s.scenarioName,
-      score: s.score.final_score,
-      tier: s.score.tier,
-      duration: s.duration,
-      timestamp: s.startedAt,
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 20);
+    ff.stdout.on("data", (d) => out.push(d));
+    ff.stderr.on("data", (d) => err.push(d));
 
-  res.json(entries);
+    ff.on("close", (code) => {
+      if (code === 0) return resolve(Buffer.concat(out));
+      reject(new Error(Buffer.concat(err).toString() || `ffmpeg exit ${code}`));
+    });
+
+    ff.stdin.end(inputBuf);
+  });
+}
+
+// Twilio -> Eleven (mulaw 8k -> PCM s16le 16k)
+async function mulaw8kB64_to_pcm16kB64(b64) {
+  const input = Buffer.from(b64, "base64");
+  const output = await runFfmpeg(input, [
+    "-hide_banner", "-loglevel", "error",
+    "-f", "mulaw", "-ar", "8000", "-ac", "1", "-i", "pipe:0",
+    "-f", "s16le", "-ar", "16000", "-ac", "1", "pipe:1",
+  ]);
+  return output.toString("base64");
+}
+
+// Eleven -> Twilio (PCM s16le 16k -> mulaw 8k)
+async function pcm16kB64_to_mulaw8kB64(b64) {
+  const input = Buffer.from(b64, "base64");
+  const output = await runFfmpeg(input, [
+    "-hide_banner", "-loglevel", "error",
+    "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", "pipe:0",
+    "-f", "mulaw", "-ar", "8000", "-ac", "1", "pipe:1",
+  ]);
+  return output.toString("base64");
+}
+
+
+
+
+app.post("/dev-call", async (req, res) => {
+  console.log("=== HIT /dev-call ===", req.body);
+
+  const { phoneNumber } = req.body;
+  if (!phoneNumber) return res.status(400).json({ error: "phoneNumber required" });
+
+  const sessionId = uuidv4();
+  sessions[sessionId] = { phoneNumber, stage: "GREETING", transcript: [] };
+
+  try {
+    const call = await client.calls.create({
+      to: phoneNumber,
+      from: process.env.TWILIO_PHONE_NUMBER,
+      url: `${process.env.BASE_URL}/voice?sessionId=${sessionId}`,
+      method: "POST",
+    });
+
+    console.log("✅ call created:", call.sid);
+    return res.json({ ok: true, sessionId, callSid: call.sid });
+  } catch (err) {
+    // Twilio SDK puts useful stuff on err.status + err.moreInfo + err.code
+    console.error("❌ Twilio call create failed");
+    console.error("status:", err.status);
+    console.error("code:", err.code);
+    console.error("message:", err.message);
+    console.error("moreInfo:", err.moreInfo);
+    console.error("details:", err.details);
+
+    return res.status(500).json({
+      error: err.message,
+      status: err.status,
+      code: err.code,
+      moreInfo: err.moreInfo,
+      details: err.details,
+    });
+  }
 });
 
-// ============ START SERVER ============
 
-app.listen(process.env.PORT || 3001, () => {
-  console.log(`FraudGuard.ai server running on port ${process.env.PORT || 3001}`);
+
+
+
+
+const server = http.createServer(app);
+
+// WebSocket server for Twilio Media Streams
+const wss = new WebSocket.Server({ server, path: "/twilio/stream" });
+
+wss.on("connection", (twilioWs, req) => {
+  console.log("✅ Twilio WS connected:", req.url);
+
+  let streamSid = null;
+  let elevenWs = null;
+
+  console.log("ELEVEN_AGENT_ID present?", !!process.env.ELEVEN_AGENT_ID, "value:", process.env.ELEVEN_AGENT_ID);
+  console.log("ELEVEN_API_KEY present?", !!process.env.ELEVENLABS_API_KEY, "len:", (process.env.ELEVENLABS_API_KEY || "").length);
+  console.log("➡️ About to fetch Eleven signed URL...");
+
+ // ---- helpers ----
+function parsePcmRate(fmt) {
+  // expected like "pcm_16000" or "pcm_44100"
+  const m = /^pcm_(\d+)$/.exec(fmt || "");
+  return m ? parseInt(m[1], 10) : null;
+}
+
+let ffIn = null;   // Twilio mulaw8k -> Eleven PCM
+let ffOut = null;  // Eleven PCM -> Twilio mulaw8k
+
+let pcmChunkBytes = 3200; // will update from metadata (100ms)
+
+// Buffer Twilio audio until ffIn exists
+let twilioMulawQueue = Buffer.alloc(0);
+
+function startTranscoders({ elevenInRate, elevenOutRate }) {
+  // ---- Twilio -> Eleven ----
+  ffIn = spawn("ffmpeg", [
+    "-hide_banner", "-loglevel", "error",
+    "-f", "mulaw", "-ar", "8000", "-ac", "1", "-i", "pipe:0",
+    "-f", "s16le", "-ar", String(elevenInRate), "-ac", "1", "pipe:1"
+  ], { stdio: ["pipe", "pipe", "pipe"] });
+
+  ffIn.stderr.on("data", (d) => console.log("ffmpeg(in) stderr:", d.toString()));
+
+  let pcmBuf = Buffer.alloc(0);
+
+  // 100ms chunks -> bytes = rate * 0.1s * 2 bytes/sample
+  pcmChunkBytes = Math.round(elevenInRate * 0.1 * 2);
+
+  ffIn.stdout.on("data", (chunk) => {
+    pcmBuf = Buffer.concat([pcmBuf, chunk]);
+
+    while (pcmBuf.length >= pcmChunkBytes) {
+      const piece = pcmBuf.subarray(0, pcmChunkBytes);
+      pcmBuf = pcmBuf.subarray(pcmChunkBytes);
+
+      if (elevenWs && elevenWs.readyState === WebSocket.OPEN) {
+        elevenWs.send(JSON.stringify({ user_audio_chunk: piece.toString("base64") }));
+      }
+    }
+  });
+
+  // Flush any queued Twilio audio we got before init
+  if (twilioMulawQueue.length) {
+    ffIn.stdin.write(twilioMulawQueue);
+    twilioMulawQueue = Buffer.alloc(0);
+  }
+
+  // ---- Eleven -> Twilio ----
+  ffOut = spawn("ffmpeg", [
+    "-hide_banner", "-loglevel", "error",
+    "-f", "s16le", "-ar", String(elevenOutRate), "-ac", "1", "-i", "pipe:0",
+    "-f", "mulaw", "-ar", "8000", "-ac", "1", "pipe:1"
+  ], { stdio: ["pipe", "pipe", "pipe"] });
+
+  ffOut.stderr.on("data", (d) => console.log("ffmpeg(out) stderr:", d.toString()));
+
+  let outBuf = Buffer.alloc(0);
+
+  ffOut.stdout.on("data", (chunk) => {
+    outBuf = Buffer.concat([outBuf, chunk]);
+
+    // Twilio plays buffered mulaw; 20ms @ 8k = 160 bytes (good practice to frame)
+    while (outBuf.length >= 160) {
+      const frame = outBuf.subarray(0, 160);
+      outBuf = outBuf.subarray(160);
+
+      if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+        twilioWs.send(JSON.stringify({
+          event: "media",
+          streamSid,
+          media: { payload: frame.toString("base64") }
+        }));
+      }
+    }
+  });
+
+  console.log("✅ Transcoders started:", { elevenInRate, elevenOutRate, pcmChunkBytes });
+}
+
+  // --- Twilio message handler ---
+  twilioWs.on("message", (data) => {
+  let msg;
+  try { msg = JSON.parse(data.toString()); } catch { return; }
+
+  // DEBUG: log first few events so we know exactly what Twilio is sending
+  if (!twilioWs._seen) twilioWs._seen = 0;
+  if (twilioWs._seen < 15) {
+    twilioWs._seen++;
+    console.log("TWILIO EVENT:", msg.event, Object.keys(msg));
+  }
+
+  if (msg.event === "start") {
+    streamSid = msg.start?.streamSid;
+    console.log("▶️ Twilio start:", streamSid);
+    return;
+  }
+
+  if (msg.event === "media") {
+  const mulawBytes = Buffer.from(msg.media.payload, "base64");
+
+  if (ffIn?.stdin?.writable) {
+    ffIn.stdin.write(mulawBytes);
+  } else {
+    // Eleven metadata not received yet; buffer a bit
+    twilioMulawQueue = Buffer.concat([twilioMulawQueue, mulawBytes]);
+
+    // optional safety cap (2 seconds of mulaw = 8000 bytes/sec)
+    const cap = 16000;
+    if (twilioMulawQueue.length > cap) {
+      twilioMulawQueue = twilioMulawQueue.subarray(twilioMulawQueue.length - cap);
+    }
+  }
+  return;
+}
+
+  if (msg.event === "stop") {
+    console.log("🛑 stop payload:", msg.stop);
+    console.log("⏹ Twilio stop");
+    try { ffOut.stdin.end(); } catch {}
+    try { ffOut.kill("SIGKILL"); } catch {}
+  }
+});
+
+  twilioWs.on("close", () => {
+    console.log("❌ Twilio WS disconnected");
+    try { elevenWs?.close(); } catch {}
+    try { ffIn?.stdin?.end(); } catch {}
+    try { ffOut?.stdin?.end(); } catch {}
+    try { ffIn?.kill("SIGKILL"); } catch {}
+    try { ffOut?.kill("SIGKILL"); } catch {}
+  });
+
+  // --- Connect to Eleven ---
+  (async () => {
+  try {
+
+    const signedUrl = await getElevenSignedUrl(process.env.ELEVEN_AGENT_ID);
+    console.log("✅ Got signed URL:", signedUrl.slice(0, 60), "...");
+
+    elevenWs = new WebSocket(signedUrl);
+
+    elevenWs.on("open", () => {
+      console.log("✅ Eleven WS connected");
+      elevenWs.send(JSON.stringify({
+        type: "conversation_initiation_client_data",
+        conversation_config_override: {
+          agent: {
+            language: "en"
+          }
+        }
+      }));
+      console.log("✅ Sent Eleven initiation payload");
+
+    });
+
+    elevenWs.on("message", (raw) => {
+      let evt;
+      try { evt = JSON.parse(raw.toString()); } catch { return; }
+
+      console.log("ELEVEN EVENT:", evt.type);
+
+      if (evt.type === "ping") {
+        const id = evt.ping_event?.event_id;
+        if (id != null) elevenWs.send(JSON.stringify({ type: "pong", event_id: id }));
+        return;
+      }
+
+      if (evt.type === "conversation_initiation_metadata") {
+        const meta = evt.conversation_initiation_metadata_event;
+        const elevenInRate = parsePcmRate(meta?.user_input_audio_format) || 16000;
+        const elevenOutRate = parsePcmRate(meta?.agent_output_audio_format) || 16000;
+
+        console.log("Eleven formats:", {
+          inFmt: meta?.user_input_audio_format,
+          outFmt: meta?.agent_output_audio_format
+          });
+
+        // Start/replace transcoders now that we know real formats
+        try { ffIn?.kill("SIGKILL"); } catch {}
+        try { ffOut?.kill("SIGKILL"); } catch {}
+        startTranscoders({ elevenInRate, elevenOutRate });
+        return;
+      }
+
+      if (evt.type === "user_transcript") {
+        console.log("🧑 user:", evt.user_transcription_event?.user_transcript);
+        return;
+      }
+
+      if (evt.type === "agent_response") {
+        console.log("🤖 agent:", evt.agent_response_event?.agent_response);
+        return;
+      }
+
+      if (evt.type === "interruption") {
+        if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+          twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
+        }
+        return;
+      }
+
+      if (evt.type === "audio") {
+        const b64 = evt.audio_event?.audio_base_64;
+        if (!b64) return;
+
+        const pcm = Buffer.from(b64, "base64");
+
+        if (ffOut?.stdin?.writable) {
+          ffOut.stdin.write(pcm);
+        } else {
+          console.log("⚠️ got Eleven audio before ffOut ready; dropping");
+        }
+        return;
+      }
+    });
+
+    elevenWs.on("close", (code, reason) => {
+      console.log("❌ Eleven WS disconnected", { code, reason: reason?.toString?.() });
+    });
+
+    elevenWs.on("error", (e) => {
+      console.log("❌ Eleven WS error:", e.message);
+    });
+  } catch (err) {
+    console.log("❌ Eleven connect failed:", err.response?.status, err.response?.data || err.message);
+  }
+})();
+});
+
+server.listen(process.env.PORT, "0.0.0.0", () => {
+  console.log(`Server running on port ${process.env.PORT}`);
 });
