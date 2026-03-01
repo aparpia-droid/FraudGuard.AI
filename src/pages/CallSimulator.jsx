@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { callScenarios } from '../data/scamScenarios';
 import { generateScammerResponse, analyzeConversation } from '../utils/scoringEngine';
+import axios from 'axios';
 import './CallSimulator.css';
 
 const CallSimulator = () => {
-  const { startSimulation, addMessage, conversationLog, endSimulation, selectedScamType } = useApp();
+  const { user, startSimulation, addMessage, conversationLog, endSimulation, selectedScamType } = useApp();
   const navigate = useNavigate();
 
   const [selectedScenario, setSelectedScenario] = useState(null);
@@ -14,7 +15,11 @@ const CallSimulator = () => {
   const [userInput, setUserInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
+  const [sessionId, setSessionId] = useState(null);
+  const [callInitiated, setCallInitiated] = useState(false);
   const messagesEndRef = useRef(null);
+
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 
   useEffect(() => {
     startSimulation('call');
@@ -44,15 +49,41 @@ const CallSimulator = () => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const handleStartCall = (scenario) => {
+  const handleStartCall = async (scenario) => {
     setSelectedScenario(scenario);
     setCallActive(true);
+
+    // Show initial message immediately
     const initialMsg = {
       sender: 'scammer',
       text: scenario.initialMessage,
       timestamp: new Date().toISOString()
     };
     addMessage(initialMsg);
+
+    // Make actual phone call through backend
+    try {
+      const phoneNumber = user?.phoneNumber || '';
+      const digitsOnly = phoneNumber.replace(/\D/g, '');
+      const formattedPhone = `+1${digitsOnly}`;
+
+      console.log('Initiating call to:', formattedPhone);
+
+      const response = await axios.post(`${API_URL}/start-call`, {
+        phoneNumber: formattedPhone,
+        scenarioId: scenario.id,
+        scenarioName: scenario.name
+      });
+
+      if (response.data.success) {
+        setSessionId(response.data.sessionId);
+        setCallInitiated(true);
+        console.log('Call initiated successfully. Session ID:', response.data.sessionId);
+      }
+    } catch (error) {
+      console.error('Error initiating call:', error);
+      // Continue with simulation even if call fails
+    }
   };
 
   const handleSendMessage = (e) => {
@@ -134,80 +165,108 @@ const CallSimulator = () => {
 
   return (
     <div className="call-simulator-container active-call">
-      <div className="call-interface">
-        <div className="call-header">
-          <div className="call-info">
-            <div className="caller-id">
-              <div className="caller-icon">📞</div>
-              <div>
-                <div className="caller-name">Unknown Caller</div>
-                <div className="caller-number">+1 (555) 123-4567</div>
+      <div className="phone-call-screen">
+        <div className="phone-container">
+          {/* Phone Call Header */}
+          <div className="phone-header">
+            <div className="status-bar">
+              <span>9:41</span>
+              <div className="status-icons">
+                <span>📶</span>
+                <span>📡</span>
+                <span>🔋</span>
               </div>
             </div>
-            <div className="call-status">
-              <div className="status-indicator active"></div>
-              <span>Call Active - {formatDuration(callDuration)}</span>
+          </div>
+
+          {/* Caller Info Display */}
+          <div className="caller-display">
+            <div className="caller-avatar">
+              <svg width="120" height="120" viewBox="0 0 120 120">
+                <circle cx="60" cy="60" r="60" fill="#E2E8F0"/>
+                <text x="60" y="75" fontSize="48" fill="#718096" textAnchor="middle">?</text>
+              </svg>
+            </div>
+            <h2 className="caller-name-display">Unknown Caller</h2>
+            <p className="caller-number-display">+1 (555) 123-4567</p>
+            <div className="call-timer">{formatDuration(callDuration)}</div>
+            <p className="call-type-label">{selectedScenario.name}</p>
+          </div>
+
+          {/* Transcript Area (scrollable) */}
+          <div className="call-transcript">
+            <div className="transcript-header">
+              <span>Call Transcript</span>
+            </div>
+            <div className="transcript-messages">
+              {conversationLog.map((message, index) => (
+                <div key={index} className={`transcript-item ${message.sender}`}>
+                  <span className="transcript-label">
+                    {message.sender === 'scammer' ? '🔴 Caller:' : '🟢 You:'}
+                  </span>
+                  <p className="transcript-text">{message.text}</p>
+                </div>
+              ))}
+              {isTyping && (
+                <div className="transcript-item scammer">
+                  <span className="transcript-label">🔴 Caller:</span>
+                  <div className="typing-dots">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
             </div>
           </div>
-          <div className="scenario-name">{selectedScenario.name}</div>
-        </div>
 
-        <div className="conversation-area">
-          <div className="messages-container">
-            {conversationLog.map((message, index) => (
-              <div key={index} className={`message ${message.sender}`}>
-                <div className="message-bubble">
-                  <div className="message-sender">
-                    {message.sender === 'scammer' ? 'Caller' : 'You'}
-                  </div>
-                  <div className="message-text">{message.text}</div>
-                  <div className="message-time">
-                    {new Date(message.timestamp).toLocaleTimeString()}
-                  </div>
-                </div>
-              </div>
-            ))}
-            {isTyping && (
-              <div className="message scammer">
-                <div className="message-bubble typing">
-                  <div className="typing-indicator">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                  </div>
-                </div>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
+          {/* Response Input */}
+          <div className="response-input-area">
+            <form onSubmit={handleSendMessage}>
+              <input
+                type="text"
+                value={userInput}
+                onChange={(e) => setUserInput(e.target.value)}
+                placeholder="Type your response..."
+                className="response-input"
+                autoFocus
+              />
+              <button type="submit" className="send-response-btn" disabled={!userInput.trim()}>
+                Send
+              </button>
+            </form>
           </div>
-        </div>
 
-        <div className="input-area">
-          <form onSubmit={handleSendMessage}>
-            <input
-              type="text"
-              value={userInput}
-              onChange={(e) => setUserInput(e.target.value)}
-              placeholder="Type your response..."
-              disabled={!callActive}
-              autoFocus
-            />
-            <button type="submit" className="btn-send" disabled={!userInput.trim()}>
-              Send
+          {/* Phone Call Actions */}
+          <div className="phone-actions">
+            <div className="action-buttons">
+              <button className="action-btn mute-btn" title="Mute">
+                <span className="btn-icon">🔇</span>
+                <span className="btn-label">mute</span>
+              </button>
+              <button className="action-btn keypad-btn" title="Keypad">
+                <span className="btn-icon">⌨️</span>
+                <span className="btn-label">keypad</span>
+              </button>
+              <button className="action-btn speaker-btn" title="Speaker">
+                <span className="btn-icon">🔊</span>
+                <span className="btn-label">speaker</span>
+              </button>
+            </div>
+
+            <button onClick={handleEndCall} className="end-call-btn">
+              <span className="end-call-icon">📞</span>
             </button>
-          </form>
-        </div>
 
-        <div className="call-controls">
-          <button onClick={handleEndCall} className="btn-end-call">
-            End Call & See Results
-          </button>
-          <div className="hint-text">
-            Remember: It's always okay to hang up on suspicious calls!
+            <p className="reminder-text">
+              Remember: It's always okay to hang up on suspicious calls!
+            </p>
           </div>
         </div>
       </div>
 
+      {/* Side Panel for Red Flags */}
       <div className="side-panel">
         <h3>Red Flags to Watch For:</h3>
         <ul className="red-flags-list">
