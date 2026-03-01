@@ -1,19 +1,29 @@
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { callScenarios } from '../data/scamScenarios';
+import { callScenarios, emailScenarios } from '../data/scamScenarios';
 import './Dashboard.css';
 
 const Dashboard = () => {
   const { user, logout, simulationHistory, selectedScamType } = useApp();
   const navigate = useNavigate();
 
+  useEffect(() => {
+    if (!user) {
+      navigate('/');
+    }
+  }, [user, navigate]);
+
   if (!user) {
-    navigate('/');
     return null;
   }
 
   const handleStartCall = () => {
     navigate('/call-simulator');
+  };
+
+  const handleStartEmail = () => {
+    navigate('/email-simulator');
   };
 
   const handleLogout = () => {
@@ -26,9 +36,13 @@ const Dashboard = () => {
     : 0;
 
   // Filter scenarios based on selected scam type
-  const filteredScenarios = selectedScamType
+  const filteredCallScenarios = selectedScamType
     ? callScenarios.filter(scenario => scenario.category === selectedScamType)
     : callScenarios;
+
+  const filteredEmailScenarios = selectedScamType
+    ? emailScenarios.filter(scenario => scenario.category === selectedScamType)
+    : emailScenarios;
 
   // Get scam type display name
   const getScamTypeName = () => {
@@ -36,6 +50,7 @@ const Dashboard = () => {
       case 'social_security': return 'Social Security / Medicare';
       case 'tech_support': return 'Tech Support';
       case 'lottery': return 'Lottery / Giveaway';
+      case 'voice_impersonation': return 'Voice Impersonation';
       default: return 'All Types';
     }
   };
@@ -94,7 +109,7 @@ const Dashboard = () => {
               <div className="scenarios-list">
                 <strong>Scenarios available:</strong>
                 <ul>
-                  {filteredScenarios.map(scenario => (
+                  {filteredCallScenarios.map(scenario => (
                     <li key={scenario.id}>{scenario.name}</li>
                   ))}
                 </ul>
@@ -102,6 +117,25 @@ const Dashboard = () => {
 
               <button onClick={handleStartCall} className="btn-start btn-call">
                 Start Call Simulation
+              </button>
+            </div>
+
+            <div className="simulator-card">
+              <div className="card-icon">📧</div>
+              <h4>Scam Email Simulator</h4>
+              <p>Learn to identify phishing emails and make safe decisions. Review suspicious emails and choose the right actions to protect yourself.</p>
+
+              <div className="scenarios-list">
+                <strong>Scenarios available:</strong>
+                <ul>
+                  {filteredEmailScenarios.map(scenario => (
+                    <li key={scenario.id}>{scenario.name}</li>
+                  ))}
+                </ul>
+              </div>
+
+              <button onClick={handleStartEmail} className="btn-start btn-email">
+                Start Email Simulation
               </button>
             </div>
           </div>

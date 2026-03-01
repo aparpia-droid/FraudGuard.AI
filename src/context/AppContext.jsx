@@ -68,6 +68,7 @@ export const AppProvider = ({ children }) => {
       type: currentSimulation,
       date: new Date().toISOString(),
       score,
+      grade: feedback.grade || 'N/A',
       feedback,
       conversationLog,
       sharedInfo

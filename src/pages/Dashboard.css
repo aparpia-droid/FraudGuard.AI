@@ -1,13 +1,13 @@
 .dashboard-container {
   min-height: 100vh;
-  background: linear-gradient(to bottom, #f0f4ff 0%, #f7fafc 100%);
+  background: linear-gradient(to bottom, #eff6ff 0%, #f0f9ff 100%);
 }
 
 .dashboard-header {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #2563eb 0%, #0891b2 100%);
   color: white;
   padding: 25px 20px;
-  box-shadow: 0 4px 20px rgba(102, 126, 234, 0.3);
+  box-shadow: 0 4px 20px rgba(37, 99, 235, 0.3);
   position: relative;
   overflow: hidden;
 }
@@ -57,7 +57,7 @@
 .btn-logout {
   padding: 10px 20px;
   background: rgba(255, 255, 255, 0.95);
-  color: #667eea;
+  color: #2563eb;
   border: none;
   border-radius: 20px;
   cursor: pointer;
@@ -105,7 +105,7 @@
   background: white;
   padding: 30px;
   border-radius: 16px;
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.1);
+  box-shadow: 0 4px 15px rgba(37, 99, 235, 0.1);
   text-align: center;
   transition: all 0.3s ease;
   border: 2px solid transparent;
@@ -120,19 +120,19 @@
   left: 0;
   width: 100%;
   height: 4px;
-  background: linear-gradient(90deg, #667eea, #764ba2);
+  background: linear-gradient(90deg, #2563eb, #0891b2);
 }
 
 .stat-card:hover {
   transform: translateY(-5px);
-  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.2);
-  border-color: #667eea;
+  box-shadow: 0 8px 25px rgba(37, 99, 235, 0.2);
+  border-color: #2563eb;
 }
 
 .stat-number {
   font-size: 52px;
   font-weight: 800;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #2563eb 0%, #0891b2 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -161,8 +161,8 @@
 .selected-type-badge {
   text-align: center;
   padding: 12px 20px;
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-  border: 2px solid #667eea;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.1) 0%, rgba(8, 145, 178, 0.1) 100%);
+  border: 2px solid #2563eb;
   border-radius: 8px;
   margin: 0 auto 25px;
   max-width: 400px;
@@ -171,7 +171,7 @@
 }
 
 .selected-type-badge strong {
-  color: #667eea;
+  color: #2563eb;
 }
 
 .simulator-cards {
@@ -184,7 +184,7 @@
   background: white;
   padding: 35px;
   border-radius: 20px;
-  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.12);
+  box-shadow: 0 6px 20px rgba(37, 99, 235, 0.12);
   transition: all 0.4s ease;
   border: 3px solid transparent;
   position: relative;
@@ -198,7 +198,7 @@
   left: -100%;
   width: 100%;
   height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.05), transparent);
+  background: linear-gradient(90deg, transparent, rgba(37, 99, 235, 0.05), transparent);
   transition: left 0.6s;
 }
 
@@ -208,8 +208,8 @@
 
 .simulator-card:hover {
   transform: translateY(-8px) scale(1.02);
-  box-shadow: 0 12px 35px rgba(102, 126, 234, 0.25);
-  border-color: #667eea;
+  box-shadow: 0 12px 35px rgba(37, 99, 235, 0.25);
+  border-color: #2563eb;
 }
 
 .card-icon {
