@@ -4,10 +4,16 @@ import { startSession } from '../lib/api'
 import Input from '../ui/Input'
 
 const SCENARIOS = [
-  { id: 'social_security', label: 'Social Security', description: 'Caller claims your SSN is suspended or there’s a problem with your benefits.' },
+  { id: 'social_security', label: 'Social Security', description: "Caller claims your SSN is suspended or there's a problem with your benefits." },
   { id: 'tech_support', label: 'Tech Support', description: 'Someone says your computer has a virus or needs remote access.' },
-  { id: 'lottery_giveaway', label: 'Lottery / Giveaway', description: 'You’ve “won” a prize and need to pay fees or give personal details to claim it.' },
+  { id: 'lottery_giveaway', label: 'Lottery / Giveaway', description: "You've \"won\" a prize and need to pay fees or give personal details to claim it." },
 ]
+
+/** Basic phone validation: at least 10 digits */
+function isValidPhone(raw: string): boolean {
+  const digits = raw.replace(/\D/g, '')
+  return digits.length >= 10 && digits.length <= 15
+}
 
 export default function Home() {
   const navigate = useNavigate()
@@ -18,6 +24,12 @@ export default function Home() {
 
   async function handleStart() {
     setError(null)
+
+    if (!isValidPhone(phoneNumber)) {
+      setError('Please enter a valid phone number (at least 10 digits).')
+      return
+    }
+
     setLoading(true)
     try {
       const { sessionId } = await startSession({ phoneNumber, scenarioId })
@@ -37,7 +49,7 @@ export default function Home() {
           Get a realistic scam call in 60 seconds.
         </p>
         <p className="home-trust-row">
-          No login • We discard your number • 60 seconds
+          No login &bull; We discard your number &bull; 60 seconds
         </p>
 
         <div className="home-section">
@@ -50,7 +62,7 @@ export default function Home() {
             className="home-phone-wrap"
           />
           <p className="home-phone-helper">
-            We use your number only to place the call. It’s discarded when the call ends.
+            We use your number only to place the call. It's discarded when the call ends.
           </p>
         </div>
 
@@ -66,7 +78,7 @@ export default function Home() {
                 onClick={() => setScenarioId(s.id)}
                 className={`home-scenario-card ${scenarioId === s.id ? 'selected' : ''}`}
               >
-                <span className="home-scenario-check" aria-hidden>✓</span>
+                <span className="home-scenario-check" aria-hidden="true">&#10003;</span>
                 <p className="home-scenario-title">{s.label}</p>
                 <p className="home-scenario-desc">{s.description}</p>
               </div>
@@ -75,7 +87,7 @@ export default function Home() {
         </div>
 
         {error && (
-          <p style={{ color: 'var(--red)', marginBottom: 16 }}>{error}</p>
+          <p style={{ color: '#c62828', marginBottom: 16 }}>{error}</p>
         )}
 
         <div className="home-cta-wrap">
@@ -85,7 +97,7 @@ export default function Home() {
             onClick={handleStart}
             disabled={loading}
           >
-            {loading ? 'Starting…' : 'Start training call'}
+            {loading ? 'Starting...' : 'Start training call'}
           </button>
           <p className="home-cta-helper">
             Your phone will ring in ~10 seconds.

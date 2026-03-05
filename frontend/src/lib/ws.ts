@@ -1,12 +1,12 @@
 /**
  * WebSocket client for live transcript streaming.
- * Connects with sessionId; server will emit mock transcript lines.
- * Later: will stream real-time STT (e.g. Groq) and/or ElevenLabs responses.
+ * Connects with sessionId; server sends transcript lines then a done signal.
  */
 
 export function connectTranscriptWs(
   sessionId: string,
   onLine: (line: string) => void,
+  onDone: () => void,
   onError?: (err: Event) => void
 ): () => void {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -17,12 +17,17 @@ export function connectTranscriptWs(
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data)
+      if (data.done === true) {
+        onDone()
+        return
+      }
       if (typeof data.line === 'string') onLine(data.line)
     } catch {
       // ignore malformed
     }
   }
 
+  ws.onclose = () => onDone()
   if (onError) ws.onerror = onError
 
   return () => ws.close()

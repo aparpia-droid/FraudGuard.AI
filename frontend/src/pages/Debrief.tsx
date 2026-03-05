@@ -6,37 +6,47 @@ import Card from '../ui/Card'
 import Button from '../ui/Button'
 import Badge from '../ui/Badge'
 
-function scoreVariant(label: string): 'green' | 'yellow' | 'red' {
-  if (label === 'Green') return 'green'
-  if (label === 'Yellow') return 'yellow'
-  return 'red'
+type BadgeVariant = 'green' | 'yellow' | 'red' | 'neutral'
+
+function tierVariant(tier: string | null): BadgeVariant {
+  if (tier === 'Safe') return 'green'
+  if (tier === 'Caution') return 'yellow'
+  if (tier === 'Vulnerable') return 'red'
+  if (tier === 'High Risk') return 'red'
+  return 'neutral'
 }
 
 /** Keywords that suggest risky disclosure */
 const RISKY_PATTERNS = /ssn|social security|account number|routing|dob|date of birth|birth date|password|pin\b/i
 
-/** Tips by risk level */
+/** Tips by risk tier (matches PRD tiers) */
 const TIPS: Record<string, string[]> = {
-  Green: [
+  Safe: [
     'Verify by calling the number on your card or statement.',
-    'Legitimate callers won\'t pressure you to act immediately.',
+    "Legitimate callers won't pressure you to act immediately.",
     'Banks and IRS rarely initiate contact by phone for sensitive matters.',
   ],
-  Yellow: [
+  Caution: [
     'Be cautious sharing any personal details over unsolicited calls.',
     'Hang up and call back using a number from official documents.',
-    'Don\'t confirm or deny anything; let them send written notice.',
+    "Don't confirm or deny anything; let them send written notice.",
   ],
-  Red: [
+  Vulnerable: [
     'Never share SSN, DOB, or account numbers over the phone.',
-    'Banks won\'t ask for full account numbers; scammers will.',
-    'Hang up immediately if pressured—real institutions won\'t do this.',
+    "Banks won't ask for full account numbers; scammers will.",
+    "Hang up immediately if pressured — real institutions won't do this.",
+  ],
+  'High Risk': [
+    'Never share SSN, DOB, or account numbers over the phone.',
+    "Banks won't ask for full account numbers; scammers will.",
+    "Hang up immediately if pressured — real institutions won't do this.",
     'Report suspected scams to FTC at reportfraud.ftc.gov.',
   ],
 }
 
-function getTips(riskLabel: string): string[] {
-  return TIPS[riskLabel] ?? TIPS.Red
+function getTips(tier: string | null): string[] {
+  if (tier && TIPS[tier]) return TIPS[tier]
+  return TIPS['High Risk']
 }
 
 /** Highlight risky transcript lines */
@@ -56,19 +66,40 @@ export default function Debrief() {
   const navigate = useNavigate()
   const [data, setData] = useState<SessionData | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [retries, setRetries] = useState(0)
 
   useEffect(() => {
     if (!sessionId) return
-    getSession(sessionId)
-      .then(setData)
-      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'))
-  }, [sessionId])
+    let cancelled = false
+
+    async function load() {
+      try {
+        const result = await getSession(sessionId!)
+        if (cancelled) return
+
+        // If session isn't scored yet, retry a few times
+        if (result.score === null && retries < 5) {
+          setTimeout(() => setRetries((r) => r + 1), 1500)
+          return
+        }
+
+        setData(result)
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : 'Failed to load')
+        }
+      }
+    }
+
+    load()
+    return () => { cancelled = true }
+  }, [sessionId, retries])
 
   if (!sessionId) return <PageContainer><p>Missing session</p></PageContainer>
   if (error) return <PageContainer><p style={{ color: '#000' }}>{error}</p></PageContainer>
-  if (!data) return <PageContainer><p>Loading…</p></PageContainer>
+  if (!data) return <PageContainer><p>Loading debrief...</p></PageContainer>
 
-  const tips = getTips(data.riskLabel)
+  const tips = getTips(data.tier)
 
   return (
     <PageContainer>
@@ -80,11 +111,23 @@ export default function Debrief() {
       <div style={{ marginBottom: 40 }}>
         <h2 className="section-title">Vulnerability score</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
-          <Badge variant={scoreVariant(data.riskLabel)}>
-            {data.score}/100
+          <Badge variant={tierVariant(data.tier)}>
+            {data.score ?? '?'}/100
           </Badge>
-          <span style={{ fontWeight: 500 }}>{data.riskLabel} risk</span>
+          <span style={{ fontWeight: 500 }}>{data.tier ?? 'Pending'}</span>
         </div>
+        {data.explanation && (
+          <pre style={{
+            fontFamily: 'ui-monospace, monospace',
+            fontSize: 13,
+            lineHeight: 1.6,
+            whiteSpace: 'pre-wrap',
+            color: 'var(--text-muted)',
+            margin: 0,
+          }}>
+            {data.explanation}
+          </pre>
+        )}
       </div>
 
       <div style={{ marginBottom: 40 }}>
