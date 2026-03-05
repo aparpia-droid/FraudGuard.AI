@@ -15,12 +15,17 @@ export function connectTranscriptWs(
   const wsUrl = `${protocol}//${host}/ws?sessionId=${encodeURIComponent(sessionId)}`
   const ws = new WebSocket(wsUrl)
 
+  let receivedDone = false
+  let receivedAnyMessage = false
+
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data)
+      receivedAnyMessage = true
 
       // Done signal from our backend
       if (data.done === true) {
+        receivedDone = true
         onDone()
         return
       }
@@ -47,6 +52,7 @@ export function connectTranscriptWs(
 
       // Extended format: ended
       if (data?.type === 'ended') {
+        receivedDone = true
         onDone()
         return
       }
@@ -55,8 +61,18 @@ export function connectTranscriptWs(
     }
   }
 
-  ws.onclose = () => onDone()
-  if (onError) ws.onerror = onError
+  ws.onclose = () => {
+    // Only treat as "done" if the server sent lines but no explicit done signal
+    // (e.g. server crashed mid-call). Don't fire if we already got a done signal
+    // or if we never received any messages (connection failed).
+    if (!receivedDone && receivedAnyMessage) {
+      onDone()
+    }
+  }
+
+  ws.onerror = (err) => {
+    if (onError) onError(err)
+  }
 
   return () => ws.close()
 }
