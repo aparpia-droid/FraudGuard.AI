@@ -3,12 +3,21 @@
  * Later: replace with DB (e.g. Redis/Postgres) when needed.
  */
 
+import type { ScoreResult } from './scoring.js'
+
+export type SessionStatus = 'pending' | 'in_progress' | 'completed'
+
 export interface Session {
   sessionId: string
   phoneNumber: string
   scenarioId: string
-  /** Accumulated transcript lines (optional; filled by WebSocket or later by STT). */
+  status: SessionStatus
+  callSid: string | null
+  /** Accumulated transcript lines (filled by WebSocket or STT). */
   transcript: string[]
+  /** Populated after scoring. */
+  scoreResult: ScoreResult | null
+  createdAt: number
 }
 
 const store = new Map<string, Session>()
@@ -33,7 +42,11 @@ export function createSession(
     sessionId,
     phoneNumber,
     scenarioId,
+    status: 'pending',
+    callSid: null,
     transcript: [],
+    scoreResult: null,
+    createdAt: Date.now(),
   }
   store.set(sessionId, session)
   return session
@@ -41,6 +54,15 @@ export function createSession(
 
 export function getSession(sessionId: string): Session | undefined {
   return store.get(sessionId)
+}
+
+export function updateSession(
+  sessionId: string,
+  updates: Partial<Pick<Session, 'status' | 'callSid' | 'scoreResult'>>
+): void {
+  const s = store.get(sessionId)
+  if (!s) return
+  Object.assign(s, updates)
 }
 
 export function appendTranscript(sessionId: string, line: string): void {

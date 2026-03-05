@@ -8,7 +8,9 @@ import { Router, Request, Response } from 'express'
 
 const router = Router()
 
-router.post('/voice', (_req: Request, res: Response) => {
+router.post('/voice', (req: Request, res: Response) => {
+  const sessionId = req.query.sessionId as string | undefined
+  // Later: use sessionId to fetch scenario, stream ElevenLabs + Groq
   res.type('application/xml')
   res.send(
     '<?xml version="1.0" encoding="UTF-8"?>' +

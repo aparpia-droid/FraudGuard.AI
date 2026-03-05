@@ -21,6 +21,7 @@ export default function Live() {
   const [error, setError] = useState<string | null>(null)
   const [autoscroll, setAutoscroll] = useState(true)
   const [typing, setTyping] = useState(false)
+  const [callEnded, setCallEnded] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -35,8 +36,13 @@ export default function Live() {
         setLines((prev) => [...prev, line])
         typingTimer = setTimeout(() => setTyping(true), 1400)
       },
-      () => setError('Connection error'),
-      () => navigate(`/debrief/${sessionId}`) // ✅ real end redirect
+      () => {
+        // Call ended
+        clearTimeout(typingTimer)
+        setTyping(false)
+        setCallEnded(true)
+      },
+      () => setError('Connection error')
     )
     return () => {
       clearTimeout(typingTimer)
@@ -50,6 +56,15 @@ export default function Live() {
     }
   }, [lines, autoscroll, typing])
 
+  // Auto-redirect to debrief 2s after call ends
+  useEffect(() => {
+    if (!callEnded || !sessionId) return
+    const t = setTimeout(() => {
+      navigate(`/debrief/${sessionId}`)
+    }, 2000)
+    return () => clearTimeout(t)
+  }, [callEnded, sessionId, navigate])
+
   if (!sessionId) return <PageContainer><p>Missing session</p></PageContainer>
 
   return (
@@ -62,12 +77,12 @@ export default function Live() {
             width: 8,
             height: 8,
             borderRadius: '50%',
-            background: error ? '#666' : '#000',
-            animation: error ? undefined : 'pulse 1.5s ease-in-out infinite',
+            background: error ? '#999' : callEnded ? '#4caf50' : '#000',
+            animation: error || callEnded ? undefined : 'pulse 1.5s ease-in-out infinite',
           }}
         />
         <span className="muted">
-          {error ? 'Disconnected' : 'Call in progress'}
+          {error ? 'Disconnected' : callEnded ? 'Call ended — loading debrief...' : 'Call in progress'}
         </span>
         <div style={{ marginLeft: 'auto' }}>
           <Button
@@ -91,7 +106,7 @@ export default function Live() {
           }}
         >
           {lines.length === 0 && !error && (
-            <p className="muted">Waiting for transcript…</p>
+            <p className="muted">Waiting for transcript...</p>
           )}
           {error && (
             <p style={{ color: '#000' }}>{error}</p>
@@ -118,7 +133,7 @@ export default function Live() {
           })}
           {typing && (
             <span className="muted" style={{ display: 'inline-block', marginTop: 8 }}>
-              Typing…
+              Typing...
             </span>
           )}
         </div>

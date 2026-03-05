@@ -32,3 +32,6 @@ Thumbs.db
 # TypeScript
 *.tsbuildinfo
 FraudGuard.AI/
+
+# Temporary audio files from ElevenLabs
+temp_audio/

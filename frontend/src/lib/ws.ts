@@ -1,30 +1,31 @@
 /**
  * WebSocket client for live transcript streaming.
- * Server emits:
- *  - { type: "transcript", line: string }
- *  - { type: "bulk_transcript", lines: string[] } (optional)
- *  - { type: "ended" } (call finished)
+ * Supports both our backend format ({ line, done }) and
+ * extended format ({ type: "transcript", type: "ended" }).
  */
 
 export function connectTranscriptWs(
   sessionId: string,
   onLine: (line: string) => void,
-  onError?: (err: Event) => void,
-  onEnded?: () => void,
-  onScore?: (score: { score: number; tier: string; explanation: string }) => void
+  onDone: () => void,
+  onError?: (err: Event) => void
 ): () => void {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
-
-  // ✅ match backend path
-  const wsUrl = `${protocol}//${host}/ws/transcript?sessionId=${encodeURIComponent(sessionId)}`
+  const wsUrl = `${protocol}//${host}/ws?sessionId=${encodeURIComponent(sessionId)}`
   const ws = new WebSocket(wsUrl)
 
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data)
 
-      // optional: server can send all previous lines at once
+      // Done signal from our backend
+      if (data.done === true) {
+        onDone()
+        return
+      }
+
+      // Extended format: bulk transcript
       if (data?.type === 'bulk_transcript' && Array.isArray(data.lines)) {
         for (const line of data.lines) {
           if (typeof line === 'string') onLine(line)
@@ -32,38 +33,29 @@ export function connectTranscriptWs(
         return
       }
 
-      // new format
+      // Extended format: single line
       if (data?.type === 'transcript' && typeof data.line === 'string') {
         onLine(data.line)
         return
       }
 
-      // backward compatible format (your old server)
+      // Simple format: { line }
       if (typeof data?.line === 'string') {
         onLine(data.line)
         return
       }
 
-      // score result pushed from server
-      if (
-      data?.type === 'score' &&
-      data.score &&
-      typeof data.score.score === 'number'
-    ) {
-      onScore?.(data.score)
-      return
-    }
-
-    // call ended signal
-    if (data?.type === 'ended') {
-      onEnded?.()
-      return
-    }
+      // Extended format: ended
+      if (data?.type === 'ended') {
+        onDone()
+        return
+      }
     } catch {
       // ignore malformed
     }
   }
 
+  ws.onclose = () => onDone()
   if (onError) ws.onerror = onError
 
   return () => ws.close()

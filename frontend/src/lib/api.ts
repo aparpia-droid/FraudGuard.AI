@@ -26,6 +26,7 @@ export interface StartSessionInput {
 
 export interface StartSessionResponse {
   sessionId: string
+  callPlaced: boolean
 }
 
 export async function startSession(
@@ -40,20 +41,14 @@ export async function startSession(
   return res.json()
 }
 
-// ✅ New scoring shape
-export interface ScoreResult {
-  score: number
-  tier: string
-  explanation: string
-}
-
-// ✅ Matches backend GET /api/sessions/:sessionId
 export interface SessionData {
   sessionId: string
-  scenarioId: string
+  status: 'pending' | 'in_progress' | 'completed'
   transcript: string[]
-  score: ScoreResult | null
-  status: string
+  score: number | null
+  /** Risk tier: Safe | Caution | Vulnerable | High Risk */
+  tier: string | null
+  explanation: string | null
 }
 
 export async function getSession(sessionId: string): Promise<SessionData> {
@@ -62,24 +57,10 @@ export async function getSession(sessionId: string): Promise<SessionData> {
   return res.json()
 }
 
-// Optional manual trigger (useful for testing)
-export async function scoreSession(sessionId: string): Promise<ScoreResult> {
+export async function scoreSession(
+  sessionId: string
+): Promise<{ score: number; tier: string; explanation: string }> {
   const res = await fetch(`${BASE}/sessions/${sessionId}/score`, { method: 'POST' })
   await throwIfNotOk(res)
   return res.json()
-}
-
-// UI helpers (optional)
-export function gradeFromScore(s: number): string {
-  if (s >= 90) return 'A'
-  if (s >= 80) return 'B'
-  if (s >= 70) return 'C'
-  if (s >= 60) return 'D'
-  return 'F'
-}
-
-export function riskLabelFromScore(s: number): 'Green' | 'Yellow' | 'Red' {
-  if (s >= 85) return 'Green'
-  if (s >= 60) return 'Yellow'
-  return 'Red'
 }

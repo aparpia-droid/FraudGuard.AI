@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import './Results.css';
@@ -7,8 +8,13 @@ const Results = () => {
   const navigate = useNavigate();
   const { user } = useApp();
 
+  useEffect(() => {
+    if (!location.state || !location.state.results) {
+      navigate('/dashboard');
+    }
+  }, [location.state, navigate]);
+
   if (!location.state || !location.state.results) {
-    navigate('/dashboard');
     return null;
   }
 
