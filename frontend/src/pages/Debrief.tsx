@@ -66,34 +66,37 @@ export default function Debrief() {
   const navigate = useNavigate()
   const [data, setData] = useState<SessionData | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [retries, setRetries] = useState(0)
 
+  // Poll until score exists (backend auto-scores shortly after call ends)
   useEffect(() => {
     if (!sessionId) return
+
     let cancelled = false
+    let timer: number | undefined
 
-    async function load() {
+    const load = async () => {
       try {
-        const result = await getSession(sessionId!)
+        const s = await getSession(sessionId)
         if (cancelled) return
+        setData(s)
 
-        // If session isn't scored yet, retry a few times
-        if (result.score === null && retries < 5) {
-          setTimeout(() => setRetries((r) => r + 1), 1500)
-          return
+        // keep polling until backend has produced a score
+        if (s.score === null) {
+          timer = window.setTimeout(load, 1200)
         }
-
-        setData(result)
       } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : 'Failed to load')
-        }
+        if (cancelled) return
+        setError(e instanceof Error ? e.message : 'Failed to load')
       }
     }
 
     load()
-    return () => { cancelled = true }
-  }, [sessionId, retries])
+
+    return () => {
+      cancelled = true
+      if (timer) window.clearTimeout(timer)
+    }
+  }, [sessionId])
 
   if (!sessionId) return <PageContainer><p>Missing session</p></PageContainer>
   if (error) return <PageContainer><p style={{ color: '#000' }}>{error}</p></PageContainer>
@@ -112,9 +115,11 @@ export default function Debrief() {
         <h2 className="section-title">Vulnerability score</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
           <Badge variant={tierVariant(data.tier)}>
-            {data.score ?? '?'}/100
+            {data.score == null ? 'Scoring...' : `${data.score}/100`}
           </Badge>
-          <span style={{ fontWeight: 500 }}>{data.tier ?? 'Pending'}</span>
+          <span style={{ fontWeight: 500 }}>
+            {data.score == null ? 'Finalizing results' : `${data.tier}`}
+          </span>
         </div>
         {data.explanation && (
           <pre style={{

@@ -1,6 +1,7 @@
 /**
  * WebSocket client for live transcript streaming.
- * Connects with sessionId; server sends transcript lines then a done signal.
+ * Supports both our backend format ({ line, done }) and
+ * extended format ({ type: "transcript", type: "ended" }).
  */
 
 export function connectTranscriptWs(
@@ -17,11 +18,38 @@ export function connectTranscriptWs(
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data)
+
+      // Done signal from our backend
       if (data.done === true) {
         onDone()
         return
       }
-      if (typeof data.line === 'string') onLine(data.line)
+
+      // Extended format: bulk transcript
+      if (data?.type === 'bulk_transcript' && Array.isArray(data.lines)) {
+        for (const line of data.lines) {
+          if (typeof line === 'string') onLine(line)
+        }
+        return
+      }
+
+      // Extended format: single line
+      if (data?.type === 'transcript' && typeof data.line === 'string') {
+        onLine(data.line)
+        return
+      }
+
+      // Simple format: { line }
+      if (typeof data?.line === 'string') {
+        onLine(data.line)
+        return
+      }
+
+      // Extended format: ended
+      if (data?.type === 'ended') {
+        onDone()
+        return
+      }
     } catch {
       // ignore malformed
     }

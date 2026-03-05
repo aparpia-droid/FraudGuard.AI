@@ -1,6 +1,9 @@
 require('dotenv').config();
+console.log("SERVER BOOTED FROM:", process.cwd());
+console.log("SERVER FILE:", __filename);
 console.log("ELEVEN KEY PRESENT:", !!process.env.ELEVENLABS_API_KEY, "LEN:", (process.env.ELEVENLABS_API_KEY || "").length);
 console.log("ELEVEN KEY PREFIX:", (process.env.ELEVENLABS_API_KEY || "").slice(0, 6));
+console.log("GROQ KEY:", process.env.GROQ_API_KEY);
 
 process.on("unhandledRejection", (reason) => {
   console.error("UNHANDLED REJECTION:", reason);
@@ -24,7 +27,12 @@ const { spawn } = require("child_process");
 const prism = require("prism-media");
 
 const app = express();
+app.use((req, res, next) => {
+  res.setHeader("X-BACKEND-ID", "fraudguard-backend-3000");
+  next();
+});
 app.use(cors());
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
@@ -43,36 +51,7 @@ const client = twilio(
   process.env.TWILIO_AUTH_TOKEN
 );
 
-const sessions = {}; // sessionId -> { phoneNumber, stage, transcript, scenarioId, agentId }
-
-// Map scenario IDs to the appropriate ElevenLabs agent
-function getAgentIdForScenario(scenarioId) {
-  console.log('🎯 Selecting agent for scenario:', scenarioId);
-
-  // Map scenarios to their respective agents
-  const scenarioAgentMap = {
-    // Social Security scenarios
-    'social_security': process.env.AGENT_SOCIAL_SECURITY,
-    'medicare_scam': process.env.AGENT_SOCIAL_SECURITY,
-
-    // Tech Support scenarios
-    'tech_support': process.env.AGENT_APPLE_SUPPORT,
-    'apple_support': process.env.AGENT_APPLE_SUPPORT,
-
-    // Lottery / Giveaway scenarios
-    'lottery_winner': process.env.AGENT_LOTTERY,
-    'free_cruise': process.env.AGENT_LOTTERY,
-
-    // Voice Impersonation scenarios - fallback to default agent
-    'grandchild_emergency': process.env.ELEVEN_AGENT_ID,
-    'boss_impersonation': process.env.ELEVEN_AGENT_ID,
-  };
-
-  const agentId = scenarioAgentMap[scenarioId] || process.env.ELEVEN_AGENT_ID;
-  console.log('✅ Selected agent:', agentId);
-
-  return agentId;
-}
+const sessions = {}; // sessionId -> { phoneNumber, stage, transcript }
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
@@ -98,86 +77,28 @@ async function getElevenSignedUrl(agentId) {
   return resp.data.signed_url;
 }
 
-app.post('/send-code', async (req, res) => {
-  const { phoneNumber } = req.body;
-
-  console.log('📱 SEND-CODE REQUEST:', { phoneNumber });
-
-  if (!phoneNumber) {
-    console.log('❌ Missing phoneNumber');
-    return res.status(400).json({ error: "phoneNumber required" });
-  }
-
-  try {
-    console.log('🔄 Sending verification code via Twilio...');
-    await client.verify.v2
-      .services(process.env.TWILIO_VERIFY_SERVICE_SID)
-      .verifications
-      .create({ to: phoneNumber, channel: 'sms' });
-
-    console.log('✅ Verification code sent successfully');
-    res.json({ success: true });
-  } catch (err) {
-    console.log('❌ Send-code error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/verify-code', async (req, res) => {
-  const { phoneNumber, code } = req.body;
-
-  console.log('📞 VERIFY-CODE REQUEST:', { phoneNumber, code });
-
-  if (!phoneNumber || !code) {
-    console.log('❌ Missing phoneNumber or code');
-    return res.status(400).json({ error: "phoneNumber and code required" });
-  }
-
-  // DEV MODE: Accept code "123456" to bypass Twilio rate limits during testing
-  if (code === '123456') {
-    console.log('✅ DEV MODE: Bypassing Twilio verification with test code');
-    return res.json({ verified: true });
-  }
-
-  try {
-    const result = await client.verify.v2
-      .services(process.env.TWILIO_VERIFY_SERVICE_SID)
-      .verificationChecks
-      .create({ to: phoneNumber, code });
-
-    console.log('✅ Twilio verification result:', result.status);
-
-    if (result.status === 'approved') {
-      return res.json({ verified: true });
-    }
-
-    return res.json({ verified: false, status: result.status });
-
-  } catch (err) {
-    console.log('❌ Verification error:', err.message);
-    return res.status(500).json({ error: err.message });
-  }
-});
-
 app.all("/voice", (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
 
   if (!sessions[sessionId]) {
-    sessions[sessionId] = { stage: "GREETING", transcript: [] };
+    sessions[sessionId] = { stage: "GREETING", transcript: [], status: "in_progress" };
   }
 
   const twiml = new twilio.twiml.VoiceResponse();
 
-  // Optional: a quick audible "beep" / greeting BEFORE streaming
-  // (Keep it short; after <Connect><Stream> Twilio won't run more TwiML until stream ends)
-  twiml.say({ voice: "Polly.Joanna" }, "Connecting.");
+  // Optional short audible line before streaming starts
+  //twiml.say({ voice: "Polly.Joanna" }, "Welcome.");
 
   const connect = twiml.connect();
-    connect.stream({
-      url: `${process.env.WSS_URL}/twilio/stream?sessionId=${encodeURIComponent(sessionId)}`,
-      statusCallback: `${process.env.BASE_URL}/twilio-stream-status`,
-      statusCallbackMethod: "POST",
-    });
+
+ const streamUrl = `${process.env.WSS_URL}/twilio/stream/${encodeURIComponent(sessionId)}`;
+  console.log("STREAM URL SENT TO TWILIO:", streamUrl);
+
+  connect.stream({
+    url: streamUrl,
+    statusCallback: `${process.env.BASE_URL}/twilio-stream-status`,
+    statusCallbackMethod: "POST",
+  });
 
   res.type("text/xml").send(twiml.toString());
 });
@@ -288,24 +209,21 @@ async function pcm16kB64_to_mulaw8kB64(b64) {
   return output.toString("base64");
 }
 
-
-
-
-app.post("/dev-call", async (req, res) => {
+async function devCallHandler(req, res){
   console.log("=== HIT /dev-call ===", req.body);
 
-  const { phoneNumber, scenarioId } = req.body;
+  const { phoneNumber } = req.body;
   if (!phoneNumber) return res.status(400).json({ error: "phoneNumber required" });
 
   const sessionId = uuidv4();
-  const agentId = scenarioId ? getAgentIdForScenario(scenarioId) : process.env.ELEVEN_AGENT_ID;
-
   sessions[sessionId] = {
     phoneNumber,
-    scenarioId,
-    agentId,
     stage: "GREETING",
-    transcript: []
+    transcript: [],
+    status: "in_progress",
+    scenarioId: "default",
+    //agentId: process.env.ELEVEN_AGENT_ID_DEFAULT,
+    score: null,
   };
 
   try {
@@ -335,34 +253,336 @@ app.post("/dev-call", async (req, res) => {
       details: err.details,
     });
   }
+}
+
+async function sendCodeHandler(req, res) {
+  const { phoneNumber } = req.body;
+
+  if (!phoneNumber) return res.status(400).json({ error: "phoneNumber required" });
+
+  try {
+    await client.verify.v2
+      .services(process.env.TWILIO_VERIFY_SERVICE_SID)
+      .verifications
+      .create({ to: phoneNumber, channel: 'sms' });
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+async function verifyCodeHandler(req, res) {
+  const { phoneNumber, code } = req.body;
+
+  if (!phoneNumber || !code) {
+    return res.status(400).json({ error: "phoneNumber and code required" });
+  }
+
+  try {
+    const result = await client.verify.v2
+      .services(process.env.TWILIO_VERIFY_SERVICE_SID)
+      .verificationChecks
+      .create({ to: phoneNumber, code });
+
+    if (result.status === 'approved') {
+      const sessionId = uuidv4();
+
+      sessions[sessionId] = {
+        phoneNumber,
+        stage: "GREETING",
+        transcript: [],
+        status: "in_progress",
+        scenarioId: "default",
+        //agentId: process.env.ELEVEN_AGENT_ID_DEFAULT,
+        score: null,
+      };
+
+
+      await client.calls.create({
+        to: phoneNumber,
+        from: process.env.TWILIO_PHONE_NUMBER,
+        url: `${process.env.BASE_URL}/voice?sessionId=${sessionId}`,
+        method: "POST",
+      });
+
+      return res.json({ verified: true, sessionId });
+    }
+
+    return res.json({ verified: false, status: result.status });
+
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// existing routes
+app.post('/dev-call', devCallHandler);
+app.post('/send-code', sendCodeHandler);
+app.post('/verify-code', verifyCodeHandler);
+
+// new /api aliases (this is the fix)
+app.post('/api/dev-call', devCallHandler);
+app.post('/api/send-code', sendCodeHandler);
+app.post('/api/verify-code', verifyCodeHandler);
+
+// ✅ match frontend: POST /api/sessions/start
+// scenario -> agent mapping
+const SCENARIO_TO_AGENT = {
+  social_security: process.env.ELEVEN_AGENT_ID_SOCIAL,
+  tech_support: process.env.ELEVEN_AGENT_ID_TECH,
+  lottery_giveaway: process.env.ELEVEN_AGENT_ID_LOTTERY,
+};
+
+const SCAM_LABELS = {
+  social_security: 'Social Security Suspension',
+  tech_support: 'Apple Tech Support',
+  lottery_giveaway: 'Lottery / Giveaway',
+};
+
+app.post("/api/sessions/start", async (req, res) => {
+  try {
+    const phoneNumber = (req.body.phoneNumber || "").trim();
+    const scenarioId = (req.body.scenarioId || "").trim();
+
+    if (!phoneNumber) return res.status(400).json({ error: "phoneNumber required" });
+    if (!scenarioId) return res.status(400).json({ error: "scenarioId required" });
+
+    const sessionId = uuidv4();
+
+    const agentId =
+      SCENARIO_TO_AGENT[scenarioId] || process.env.ELEVEN_AGENT_ID_DEFAULT;
+
+    if (!agentId) {
+      return res.status(500).json({ error: "Missing agentId for scenario (check .env)" });
+    }
+
+    sessions[sessionId] = {
+      phoneNumber,
+      scenarioId,
+      agentId,
+      stage: "GREETING",
+      transcript: [],
+      status: "in_progress",
+      score: null,
+    };
+
+    const call = await client.calls.create({
+      to: phoneNumber,
+      from: process.env.TWILIO_PHONE_NUMBER,
+      url: `${process.env.BASE_URL}/voice?sessionId=${sessionId}`,
+      method: "POST",
+    });
+
+    console.log("✅ call created:", call.sid, "scenario:", scenarioId, "agent:", agentId);
+
+    res.json({ sessionId });
+  } catch (err) {
+    console.error("❌ /api/sessions/start failed:", err?.message || err);
+    res.status(500).json({ error: err?.message || "Failed to start session" });
+  }
 });
 
+// ✅ match frontend: GET /api/sessions/:sessionId
+app.get('/api/sessions/:sessionId', (req, res) => {
+  const { sessionId } = req.params
+  const s = sessions[sessionId]
+  if (!s) return res.status(404).json({ error: 'Session not found' })
 
+  res.json({
+    sessionId,
+    scenarioId: s.scenarioId || 'default',
+    transcript: s.transcript || [],
+    score: s.score ?? null,        // ✅ null until scored; object after scoring
+    status: s.status ?? 'in_progress',
+  })
+})
 
+app.post('/api/sessions/:sessionId/score', async (req, res) => {
+  const { sessionId } = req.params;
+  const session = sessions[sessionId];
 
+  if (!session) return res.status(404).json({ error: 'Session not found' });
 
+  if (!session.transcript || session.transcript.length === 0) {
+    return res.status(400).json({ error: 'No transcript available yet' });
+  }
+
+  // If already scored, return cached result
+  if (session.score) return res.json(session.score);
+
+  const label = SCAM_LABELS[session.scenarioId] || 'Unknown';
+  const transcriptText = session.transcript.join('\n');
+
+  try {
+    const groqResponse = await axios.post(
+      'https://api.groq.com/openai/v1/chat/completions',
+      {
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          {
+            role: 'system',
+            content: `You are the FraudGuard safety scorer. Analyze ONLY the test subject labeled "You:".
+
+Score starts at 100. Deduct points for:
+- Sharing personal info
+- Blind compliance
+- Agreeing to send money
+- Sharing codes/passwords
+
+Add points (max +15) for:
+- Questioning the caller
+- Refusing to share info
+- Saying you'll call official number
+- Hanging up early
+
+If critical info was shared, cap at 39.
+
+Return ONLY valid JSON:
+{
+  "score": 0,
+  "tier": "",
+  "explanation": ""
+}`,
+          },
+          {
+            role: 'user',
+            content: `Scenario: ${label}\n\nTranscript:\n${transcriptText}`,
+          },
+        ],
+        temperature: 0.1,
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        },
+        timeout: 30000,
+      }
+    );
+
+    let raw = groqResponse.data?.choices?.[0]?.message?.content || '';
+    raw = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+
+    let result;
+    try {
+      result = JSON.parse(raw);
+      if (typeof result.score !== 'number' || !result.tier || !result.explanation) {
+        console.error("Scorer JSON missing fields:", result);
+        return res.status(502).json({ error: "Malformed JSON from scorer" });
+      }
+    } catch (e) {
+      console.error("Groq returned invalid JSON:", raw);
+      return res.status(502).json({ error: "Invalid JSON from scorer" });
+    }
+
+    session.score = result;
+
+    broadcastToBrowsers(sessionId, { type: "score", score: result });
+
+    return res.json(result);
+
+  } catch (err) {
+    console.error("Scoring error:", err.response?.data || err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 const server = http.createServer(app);
 
-// WebSocket server for Twilio Media Streams
-const wss = new WebSocket.Server({ server, path: "/twilio/stream" });
+// WebSocket servers (noServer so we can route upgrades ourselves)
+const wssTwilio = new WebSocket.Server({ noServer: true, perMessageDeflate: false });
+const wssBrowser = new WebSocket.Server({ noServer: true, perMessageDeflate: false });
 
-wss.on("connection", (twilioWs, req) => {
-  console.log("✅ Twilio WS connected:", req.url);
+// Route HTTP -> WS upgrades by path
+server.on("upgrade", (req, socket, head) => {
+  const pathname = (req.url || "").split("?")[0];
 
-  // Extract sessionId from URL query parameters
-  const url = new URL(req.url, `http://localhost`);
-  const sessionId = url.searchParams.get('sessionId');
-  console.log('📋 Session ID from WS URL:', sessionId);
+  if (pathname.startsWith("/twilio/stream")) {
+    wssTwilio.handleUpgrade(req, socket, head, (ws) => {
+      wssTwilio.emit("connection", ws, req);
+    });
+    return;
+  }
 
-  // Get agentId from session, fallback to default
-  const session = sessions[sessionId];
-  const agentId = session?.agentId || process.env.ELEVEN_AGENT_ID;
-  console.log('🎭 Using agent ID:', agentId, 'for scenario:', session?.scenarioId);
+  if (pathname === "/ws/transcript") {
+    wssBrowser.handleUpgrade(req, socket, head, (ws) => {
+      wssBrowser.emit("connection", ws, req);
+    });
+    return;
+  }
+
+  // Unknown WS route
+  socket.destroy();
+});
+
+// sessionId -> Set of browser sockets
+const browserClients = new Map();
+
+function addBrowserClient(sessionId, ws) {
+  if (!browserClients.has(sessionId)) browserClients.set(sessionId, new Set());
+  browserClients.get(sessionId).add(ws);
+}
+
+function removeBrowserClient(sessionId, ws) {
+  const set = browserClients.get(sessionId);
+  if (!set) return;
+  set.delete(ws);
+  if (set.size === 0) browserClients.delete(sessionId);
+}
+
+function broadcastToBrowsers(sessionId, payload) {
+  const set = browserClients.get(sessionId);
+  if (!set) return;
+  const msg = JSON.stringify(payload);
+  for (const ws of set) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+  }
+}
+
+wssBrowser.on("connection", (ws, req) => {
+  const u = new URL(req.url, `http://${req.headers.host}`);
+  const sessionId = u.searchParams.get("sessionId");
+
+  if (!sessionId) {
+    ws.close(1008, "missing sessionId");
+    return;
+  }
+
+  console.log("✅ Browser WS connected:", sessionId);
+  addBrowserClient(sessionId, ws);
+
+  // optional: send existing transcript immediately
+  const s = sessions[sessionId];
+  if (s?.transcript?.length) {
+    ws.send(JSON.stringify({ type: "bulk_transcript", lines: s.transcript }));
+  }
+
+  ws.on("close", () => {
+    console.log("❌ Browser WS disconnected:", sessionId);
+    removeBrowserClient(sessionId, ws);
+  });
+});
+
+wssTwilio.on("connection", (twilioWs, req) => {
+  console.log("RAW Twilio WS req.url:", req.url);
+
+// accept only /twilio/stream/<sessionId>
+const m = /^\/twilio\/stream\/([^/?#]+)/.exec(req.url || "");
+const sessionId = m ? decodeURIComponent(m[1]) : null;
+
+if (!sessionId) {
+  console.log("❌ Missing sessionId in path; closing");
+  twilioWs.close();
+  return;
+}
+
+console.log("✅ Twilio stream sessionId:", sessionId);
 
   let streamSid = null;
   let elevenWs = null;
 
+  console.log("ELEVEN_AGENT_ID present?", !!process.env.ELEVEN_AGENT_ID, "value:", process.env.ELEVEN_AGENT_ID);
   console.log("ELEVEN_API_KEY present?", !!process.env.ELEVENLABS_API_KEY, "len:", (process.env.ELEVENLABS_API_KEY || "").length);
   console.log("➡️ About to fetch Eleven signed URL...");
 
@@ -435,11 +655,14 @@ function startTranscoders({ elevenInRate, elevenOutRate }) {
       outBuf = outBuf.subarray(160);
 
       if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
-        twilioWs.send(JSON.stringify({
-          event: "media",
-          streamSid,
-          media: { payload: frame.toString("base64") }
-        }));
+        twilioWs.send(
+          JSON.stringify({
+            event: "media",
+            streamSid,
+            media: { payload: frame.toString("base64") }
+          }),
+          { compress: false }
+        );
       }
     }
   });
@@ -461,8 +684,7 @@ function startTranscoders({ elevenInRate, elevenOutRate }) {
 
   if (msg.event === "start") {
     streamSid = msg.start?.streamSid;
-    console.log("▶️ Twilio start:", streamSid);
-    return;
+    const callSid = msg.start?.callSid; // ✅ use this as key
   }
 
   if (msg.event === "media") {
@@ -484,11 +706,38 @@ function startTranscoders({ elevenInRate, elevenOutRate }) {
 }
 
   if (msg.event === "stop") {
-    console.log("🛑 stop payload:", msg.stop);
-    console.log("⏹ Twilio stop");
-    try { ffOut.stdin.end(); } catch {}
-    try { ffOut.kill("SIGKILL"); } catch {}
+  console.log("🛑 stop payload:", msg.stop);
+  console.log("⏹ Twilio stop");
+
+  // Mark session ended + tell browser UIs
+  if (sessionId) {
+    if (!sessions[sessionId]) {
+      sessions[sessionId] = { stage: "GREETING", transcript: [], status: "ended" };
+    } else {
+      sessions[sessionId].status = "ended";
+    }
+    broadcastToBrowsers(sessionId, { type: "ended" });
+    // ✅ Auto-trigger scoring AFTER call ends (non-blocking)
+setTimeout(() => {
+  const s = sessions[sessionId];
+  if (!s) return;
+  if (s.score) return; // already scored
+  if (!s.transcript || s.transcript.length === 0) return; // nothing to score yet
+
+  axios
+    .post(`${process.env.BASE_URL}/api/sessions/${sessionId}/score`)
+    .catch((e) => console.log("auto-score failed:", e.message));
+}, 1200);
   }
+
+  // Shut down transcoding pipelines
+  try { ffIn?.stdin?.end(); } catch {}
+  try { ffOut?.stdin?.end(); } catch {}
+  try { ffIn?.kill("SIGKILL"); } catch {}
+  try { ffOut?.kill("SIGKILL"); } catch {}
+
+  return;
+}
 });
 
   twilioWs.on("close", () => {
@@ -504,8 +753,11 @@ function startTranscoders({ elevenInRate, elevenOutRate }) {
   (async () => {
   try {
 
-    const signedUrl = await getElevenSignedUrl(agentId);
-    console.log("✅ Got signed URL for agent", agentId, ":", signedUrl.slice(0, 60), "...");
+    const agentId = sessions[sessionId]?.agentId || process.env.ELEVEN_AGENT_ID_DEFAULT;
+      console.log("🎭 Using agent for session:", sessionId, agentId);
+
+      const signedUrl = await getElevenSignedUrl(agentId);
+    console.log("✅ Got signed URL:", signedUrl.slice(0, 60), "...");
 
     elevenWs = new WebSocket(signedUrl);
 
@@ -553,18 +805,31 @@ function startTranscoders({ elevenInRate, elevenOutRate }) {
       }
 
       if (evt.type === "user_transcript") {
-        console.log("🧑 user:", evt.user_transcription_event?.user_transcript);
+        const text = evt.user_transcription_event?.user_transcript;
+        if (text && sessionId) {
+          const line = `You: ${text}`;
+          sessions[sessionId].transcript.push(line);
+          broadcastToBrowsers(sessionId, { type: "transcript", line });
+        }
         return;
       }
 
       if (evt.type === "agent_response") {
-        console.log("🤖 agent:", evt.agent_response_event?.agent_response);
+        const text = evt.agent_response_event?.agent_response;
+        if (text && sessionId) {
+          const line = `Caller: ${text}`;
+          sessions[sessionId].transcript.push(line);
+          broadcastToBrowsers(sessionId, { type: "transcript", line });
+        }
         return;
       }
 
       if (evt.type === "interruption") {
         if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
-          twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
+          twilioWs.send(
+            JSON.stringify({ event: "clear", streamSid }),
+            { compress: false }
+          );
         }
         return;
       }
@@ -597,6 +862,6 @@ function startTranscoders({ elevenInRate, elevenOutRate }) {
 })();
 });
 
-server.listen(process.env.PORT, "0.0.0.0", () => {
-  console.log(`Server running on port ${process.env.PORT}`);
+server.listen(process.env.PORT || 3000, () => {
+  console.log(`Server running on port ${process.env.PORT || 3000}`);
 });

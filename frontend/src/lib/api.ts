@@ -5,6 +5,20 @@
 
 const BASE = '/api'
 
+async function throwIfNotOk(res: Response) {
+  if (res.ok) return
+
+  let msg = res.statusText
+  try {
+    const data = await res.json()
+    msg = data?.error ?? data?.message ?? msg
+  } catch {
+    // ignore JSON parse errors
+  }
+
+  throw new Error(msg || `Request failed (${res.status})`)
+}
+
 export interface StartSessionInput {
   phoneNumber: string
   scenarioId: string
@@ -23,10 +37,7 @@ export async function startSession(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   })
-  if (!res.ok) {
-    const body = await res.json().catch(() => null)
-    throw new Error(body?.error ?? `Failed to start session: ${res.statusText}`)
-  }
+  await throwIfNotOk(res)
   return res.json()
 }
 
@@ -42,16 +53,14 @@ export interface SessionData {
 
 export async function getSession(sessionId: string): Promise<SessionData> {
   const res = await fetch(`${BASE}/sessions/${sessionId}`)
-  if (!res.ok) throw new Error(`Failed to fetch session: ${res.statusText}`)
+  await throwIfNotOk(res)
   return res.json()
 }
 
 export async function scoreSession(
   sessionId: string
 ): Promise<{ score: number; tier: string; explanation: string }> {
-  const res = await fetch(`${BASE}/sessions/${sessionId}/score`, {
-    method: 'POST',
-  })
-  if (!res.ok) throw new Error(`Failed to score session: ${res.statusText}`)
+  const res = await fetch(`${BASE}/sessions/${sessionId}/score`, { method: 'POST' })
+  await throwIfNotOk(res)
   return res.json()
 }

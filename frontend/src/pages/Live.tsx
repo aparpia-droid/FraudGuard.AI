@@ -37,7 +37,7 @@ export default function Live() {
         typingTimer = setTimeout(() => setTyping(true), 1400)
       },
       () => {
-        // Call ended — stop typing indicator and show completion
+        // Call ended
         clearTimeout(typingTimer)
         setTyping(false)
         setCallEnded(true)
