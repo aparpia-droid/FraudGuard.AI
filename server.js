@@ -801,9 +801,6 @@ function processElevenAudio(pcmB64) {
   }
 }
 
-  console.log("✅ Transcoders started:", { elevenInRate, elevenOutRate, pcmChunkBytes });
-}
-
   // --- Twilio message handler ---
   twilioWs.on("message", (data) => {
   let msg;
