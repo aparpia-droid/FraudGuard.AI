@@ -46,7 +46,7 @@ export interface SessionData {
   status: 'pending' | 'in_progress' | 'completed'
   transcript: string[]
   score: number | null
-  /** Risk tier: Safe | Caution | Vulnerable | High Risk */
+  /** Risk tier: Scam-Proof | Cautious | Aware but Exposed | Vulnerable | High Risk | Compromised */
   tier: string | null
   explanation: string | null
 }

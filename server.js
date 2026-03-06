@@ -935,6 +935,19 @@ setTimeout(() => {
 })();
 });
 
+// Serve built frontend in production
+const FRONTEND_DIST = path.join(__dirname, 'frontend', 'dist');
+if (fs.existsSync(FRONTEND_DIST)) {
+  app.use(express.static(FRONTEND_DIST));
+  // SPA fallback: serve index.html for any non-API route
+  app.get('*', (req, res) => {
+    if (!req.url.startsWith('/api') && !req.url.startsWith('/audio') && !req.url.startsWith('/voice') && !req.url.startsWith('/twilio')) {
+      res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
+    }
+  });
+  console.log("Serving frontend from", FRONTEND_DIST);
+}
+
 server.listen(process.env.PORT || 3000, () => {
   console.log(`Server running on port ${process.env.PORT || 3000}`);
 });
