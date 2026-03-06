@@ -23,7 +23,7 @@ const path = require('path');
 const axios = require('axios');
 const http = require("http");
 const WebSocket = require("ws");
-const { spawn } = require("child_process");
+// child_process no longer needed - using pure JS audio transcoding
 const prism = require("prism-media");
 
 const app = express();
@@ -169,44 +169,100 @@ app.get('/test-tts', async (req, res) => {
 }
 });
 
-function runFfmpeg(inputBuf, args) {
-  return new Promise((resolve, reject) => {
-    const ff = spawn("ffmpeg", args, { stdio: ["pipe", "pipe", "pipe"] });
-    const out = [];
-    const err = [];
+// ---- Pure JS mulaw <-> PCM transcoding (no ffmpeg needed) ----
 
-    ff.stdout.on("data", (d) => out.push(d));
-    ff.stderr.on("data", (d) => err.push(d));
+// G.711 mu-law decode table (256 entries: mulaw byte -> 16-bit linear)
+const MULAW_DECODE = new Int16Array(256);
+(function buildMulawDecode() {
+  for (let i = 0; i < 256; i++) {
+    let mu = ~i & 0xFF;
+    let sign = mu & 0x80;
+    let exponent = (mu >> 4) & 0x07;
+    let mantissa = mu & 0x0F;
+    let sample = ((mantissa << 3) + 0x84) << exponent;
+    sample -= 0x84;
+    MULAW_DECODE[i] = sign ? -sample : sample;
+  }
+})();
 
-    ff.on("close", (code) => {
-      if (code === 0) return resolve(Buffer.concat(out));
-      reject(new Error(Buffer.concat(err).toString() || `ffmpeg exit ${code}`));
-    });
-
-    ff.stdin.end(inputBuf);
-  });
+// Encode 16-bit linear sample to mulaw byte
+function linearToMulaw(sample) {
+  const MULAW_MAX = 0x1FFF;
+  const MULAW_BIAS = 33;
+  let sign = 0;
+  if (sample < 0) { sign = 0x80; sample = -sample; }
+  if (sample > MULAW_MAX) sample = MULAW_MAX;
+  sample += MULAW_BIAS;
+  let exponent = 7;
+  const expMask = 0x4000;
+  for (; exponent > 0; exponent--) {
+    if (sample & expMask) break;
+    sample <<= 1;
+  }
+  const mantissa = (sample >> 10) & 0x0F;
+  return ~(sign | (exponent << 4) | mantissa) & 0xFF;
 }
 
-// Twilio -> Eleven (mulaw 8k -> PCM s16le 16k)
-async function mulaw8kB64_to_pcm16kB64(b64) {
-  const input = Buffer.from(b64, "base64");
-  const output = await runFfmpeg(input, [
-    "-hide_banner", "-loglevel", "error",
-    "-f", "mulaw", "-ar", "8000", "-ac", "1", "-i", "pipe:0",
-    "-f", "s16le", "-ar", "16000", "-ac", "1", "pipe:1",
-  ]);
-  return output.toString("base64");
+// Decode mulaw buffer to PCM s16le buffer (same sample rate)
+function decodeMulaw(mulawBuf) {
+  const pcm = Buffer.alloc(mulawBuf.length * 2);
+  for (let i = 0; i < mulawBuf.length; i++) {
+    pcm.writeInt16LE(MULAW_DECODE[mulawBuf[i]], i * 2);
+  }
+  return pcm;
 }
 
-// Eleven -> Twilio (PCM s16le 16k -> mulaw 8k)
-async function pcm16kB64_to_mulaw8kB64(b64) {
+// Encode PCM s16le buffer to mulaw buffer (same sample rate)
+function encodeMulaw(pcmBuf) {
+  const mulaw = Buffer.alloc(pcmBuf.length / 2);
+  for (let i = 0; i < mulaw.length; i++) {
+    mulaw[i] = linearToMulaw(pcmBuf.readInt16LE(i * 2));
+  }
+  return mulaw;
+}
+
+// Resample PCM s16le: change sample rate by ratio (linear interpolation)
+function resamplePcm(pcmBuf, fromRate, toRate) {
+  const numSamplesIn = pcmBuf.length / 2;
+  const ratio = toRate / fromRate;
+  const numSamplesOut = Math.round(numSamplesIn * ratio);
+  const out = Buffer.alloc(numSamplesOut * 2);
+  for (let i = 0; i < numSamplesOut; i++) {
+    const srcIdx = i / ratio;
+    const idx0 = Math.floor(srcIdx);
+    const idx1 = Math.min(idx0 + 1, numSamplesIn - 1);
+    const frac = srcIdx - idx0;
+    const s0 = pcmBuf.readInt16LE(idx0 * 2);
+    const s1 = pcmBuf.readInt16LE(idx1 * 2);
+    const sample = Math.round(s0 + frac * (s1 - s0));
+    out.writeInt16LE(Math.max(-32768, Math.min(32767, sample)), i * 2);
+  }
+  return out;
+}
+
+// Twilio -> Eleven (mulaw 8k -> PCM s16le at target rate)
+function mulaw8kToPcm(mulawBuf, targetRate = 16000) {
+  const pcm8k = decodeMulaw(mulawBuf);
+  if (targetRate === 8000) return pcm8k;
+  return resamplePcm(pcm8k, 8000, targetRate);
+}
+
+// Eleven -> Twilio (PCM s16le at source rate -> mulaw 8k)
+function pcmToMulaw8k(pcmBuf, sourceRate = 16000) {
+  let pcm8k = pcmBuf;
+  if (sourceRate !== 8000) pcm8k = resamplePcm(pcmBuf, sourceRate, 8000);
+  return encodeMulaw(pcm8k);
+}
+
+// Base64 convenience wrappers (for one-shot usage)
+function mulaw8kB64_to_pcm16kB64(b64) {
   const input = Buffer.from(b64, "base64");
-  const output = await runFfmpeg(input, [
-    "-hide_banner", "-loglevel", "error",
-    "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", "pipe:0",
-    "-f", "mulaw", "-ar", "8000", "-ac", "1", "pipe:1",
-  ]);
-  return output.toString("base64");
+  return mulaw8kToPcm(input, 16000).toString("base64");
+}
+
+function pcm16kB64_to_mulaw8kB64(b64) {
+  const input = Buffer.from(b64, "base64");
+  return pcmToMulaw8k(input, 16000).toString("base64");
 }
 
 async function devCallHandler(req, res){
@@ -666,79 +722,84 @@ function parsePcmRate(fmt) {
   return m ? parseInt(m[1], 10) : null;
 }
 
-let ffIn = null;   // Twilio mulaw8k -> Eleven PCM
-let ffOut = null;  // Eleven PCM -> Twilio mulaw8k
+let transcoderReady = false;
+let elevenInRate_g = 16000;
+let elevenOutRate_g = 16000;
 
 let pcmChunkBytes = 3200; // will update from metadata (100ms)
 
-// Buffer Twilio audio until ffIn exists
+// Buffer Twilio audio until transcoders are ready
 let twilioMulawQueue = Buffer.alloc(0);
 
+// Accumulator for PCM chunks going to Eleven
+let pcmAccum = Buffer.alloc(0);
+
 function startTranscoders({ elevenInRate, elevenOutRate }) {
-  // ---- Twilio -> Eleven ----
-  ffIn = spawn("ffmpeg", [
-    "-hide_banner", "-loglevel", "error",
-    "-f", "mulaw", "-ar", "8000", "-ac", "1", "-i", "pipe:0",
-    "-f", "s16le", "-ar", String(elevenInRate), "-ac", "1", "pipe:1"
-  ], { stdio: ["pipe", "pipe", "pipe"] });
-
-  ffIn.stderr.on("data", (d) => console.log("ffmpeg(in) stderr:", d.toString()));
-
-  let pcmBuf = Buffer.alloc(0);
+  elevenInRate_g = elevenInRate;
+  elevenOutRate_g = elevenOutRate;
 
   // 100ms chunks -> bytes = rate * 0.1s * 2 bytes/sample
   pcmChunkBytes = Math.round(elevenInRate * 0.1 * 2);
 
-  ffIn.stdout.on("data", (chunk) => {
-    pcmBuf = Buffer.concat([pcmBuf, chunk]);
-
-    while (pcmBuf.length >= pcmChunkBytes) {
-      const piece = pcmBuf.subarray(0, pcmChunkBytes);
-      pcmBuf = pcmBuf.subarray(pcmChunkBytes);
-
-      if (elevenWs && elevenWs.readyState === WebSocket.OPEN) {
-        elevenWs.send(JSON.stringify({ user_audio_chunk: piece.toString("base64") }));
-      }
-    }
-  });
+  transcoderReady = true;
+  console.log("✅ Pure JS transcoders ready:", { elevenInRate, elevenOutRate, pcmChunkBytes });
 
   // Flush any queued Twilio audio we got before init
   if (twilioMulawQueue.length) {
-    ffIn.stdin.write(twilioMulawQueue);
+    processTwilioAudio(twilioMulawQueue);
     twilioMulawQueue = Buffer.alloc(0);
   }
+}
 
-  // ---- Eleven -> Twilio ----
-  ffOut = spawn("ffmpeg", [
-    "-hide_banner", "-loglevel", "error",
-    "-f", "s16le", "-ar", String(elevenOutRate), "-ac", "1", "-i", "pipe:0",
-    "-f", "mulaw", "-ar", "8000", "-ac", "1", "pipe:1"
-  ], { stdio: ["pipe", "pipe", "pipe"] });
+// Process mulaw from Twilio -> PCM for Eleven
+function processTwilioAudio(mulawBuf) {
+  const pcm = mulaw8kToPcm(mulawBuf, elevenInRate_g);
+  pcmAccum = Buffer.concat([pcmAccum, pcm]);
 
-  ffOut.stderr.on("data", (d) => console.log("ffmpeg(out) stderr:", d.toString()));
+  while (pcmAccum.length >= pcmChunkBytes) {
+    const piece = pcmAccum.subarray(0, pcmChunkBytes);
+    pcmAccum = pcmAccum.subarray(pcmChunkBytes);
 
-  let outBuf = Buffer.alloc(0);
-
-  ffOut.stdout.on("data", (chunk) => {
-    outBuf = Buffer.concat([outBuf, chunk]);
-
-    // Twilio plays buffered mulaw; 20ms @ 8k = 160 bytes (good practice to frame)
-    while (outBuf.length >= 160) {
-      const frame = outBuf.subarray(0, 160);
-      outBuf = outBuf.subarray(160);
-
-      if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
-        twilioWs.send(
-          JSON.stringify({
-            event: "media",
-            streamSid,
-            media: { payload: frame.toString("base64") }
-          }),
-          { compress: false }
-        );
-      }
+    if (elevenWs && elevenWs.readyState === WebSocket.OPEN) {
+      elevenWs.send(JSON.stringify({ user_audio_chunk: piece.toString("base64") }));
     }
-  });
+  }
+}
+
+// Process PCM from Eleven -> mulaw for Twilio
+function processElevenAudio(pcmB64) {
+  const pcmBuf = Buffer.from(pcmB64, "base64");
+  const mulawBuf = pcmToMulaw8k(pcmBuf, elevenOutRate_g);
+
+  // Twilio plays buffered mulaw; 20ms @ 8k = 160 bytes
+  let offset = 0;
+  while (offset + 160 <= mulawBuf.length) {
+    const frame = mulawBuf.subarray(offset, offset + 160);
+    offset += 160;
+
+    if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+      twilioWs.send(
+        JSON.stringify({
+          event: "media",
+          streamSid,
+          media: { payload: frame.toString("base64") }
+        }),
+        { compress: false }
+      );
+    }
+  }
+  // Send remainder if any
+  if (offset < mulawBuf.length && streamSid && twilioWs.readyState === WebSocket.OPEN) {
+    twilioWs.send(
+      JSON.stringify({
+        event: "media",
+        streamSid,
+        media: { payload: mulawBuf.subarray(offset).toString("base64") }
+      }),
+      { compress: false }
+    );
+  }
+}
 
   console.log("✅ Transcoders started:", { elevenInRate, elevenOutRate, pcmChunkBytes });
 }
@@ -763,8 +824,8 @@ function startTranscoders({ elevenInRate, elevenOutRate }) {
   if (msg.event === "media") {
   const mulawBytes = Buffer.from(msg.media.payload, "base64");
 
-  if (ffIn?.stdin?.writable) {
-    ffIn.stdin.write(mulawBytes);
+  if (transcoderReady) {
+    processTwilioAudio(mulawBytes);
   } else {
     // Eleven metadata not received yet; buffer a bit
     twilioMulawQueue = Buffer.concat([twilioMulawQueue, mulawBytes]);
@@ -803,11 +864,10 @@ setTimeout(() => {
 }, 1200);
   }
 
-  // Shut down transcoding pipelines
-  try { ffIn?.stdin?.end(); } catch {}
-  try { ffOut?.stdin?.end(); } catch {}
-  try { ffIn?.kill("SIGKILL"); } catch {}
-  try { ffOut?.kill("SIGKILL"); } catch {}
+  // Reset transcoding state
+  transcoderReady = false;
+  pcmAccum = Buffer.alloc(0);
+  twilioMulawQueue = Buffer.alloc(0);
 
   return;
 }
@@ -816,10 +876,9 @@ setTimeout(() => {
   twilioWs.on("close", () => {
     console.log("❌ Twilio WS disconnected");
     try { elevenWs?.close(); } catch {}
-    try { ffIn?.stdin?.end(); } catch {}
-    try { ffOut?.stdin?.end(); } catch {}
-    try { ffIn?.kill("SIGKILL"); } catch {}
-    try { ffOut?.kill("SIGKILL"); } catch {}
+    transcoderReady = false;
+    pcmAccum = Buffer.alloc(0);
+    twilioMulawQueue = Buffer.alloc(0);
   });
 
   // --- Connect to Eleven ---
@@ -871,8 +930,7 @@ setTimeout(() => {
           });
 
         // Start/replace transcoders now that we know real formats
-        try { ffIn?.kill("SIGKILL"); } catch {}
-        try { ffOut?.kill("SIGKILL"); } catch {}
+        transcoderReady = false;
         startTranscoders({ elevenInRate, elevenOutRate });
         return;
       }
@@ -913,10 +971,10 @@ setTimeout(() => {
 
         const pcm = Buffer.from(b64, "base64");
 
-        if (ffOut?.stdin?.writable) {
-          ffOut.stdin.write(pcm);
+        if (transcoderReady) {
+          processElevenAudio(b64);
         } else {
-          console.log("⚠️ got Eleven audio before ffOut ready; dropping");
+          console.log("⚠️ got Eleven audio before transcoder ready; dropping");
         }
         return;
       }
