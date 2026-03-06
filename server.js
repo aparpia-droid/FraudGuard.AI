@@ -329,9 +329,9 @@ app.post('/api/verify-code', verifyCodeHandler);
 // ✅ match frontend: POST /api/sessions/start
 // scenario -> agent mapping
 const SCENARIO_TO_AGENT = {
-  social_security: process.env.ELEVEN_AGENT_ID_SOCIAL,
-  tech_support: process.env.ELEVEN_AGENT_ID_TECH,
-  lottery_giveaway: process.env.ELEVEN_AGENT_ID_LOTTERY,
+  social_security: process.env.AGENT_SOCIAL_SECURITY,
+  tech_support: process.env.AGENT_APPLE_SUPPORT,
+  lottery_giveaway: process.env.AGENT_LOTTERY,
 };
 
 const SCAM_LABELS = {
@@ -376,10 +376,10 @@ app.post("/api/sessions/start", async (req, res) => {
 
     console.log("✅ call created:", call.sid, "scenario:", scenarioId, "agent:", agentId);
 
-    res.json({ sessionId });
+    res.json({ sessionId, callPlaced: true });
   } catch (err) {
     console.error("❌ /api/sessions/start failed:", err?.message || err);
-    res.status(500).json({ error: err?.message || "Failed to start session" });
+    res.status(500).json({ error: err?.message || "Failed to start session", callPlaced: false });
   }
 });
 
@@ -389,11 +389,14 @@ app.get('/api/sessions/:sessionId', (req, res) => {
   const s = sessions[sessionId]
   if (!s) return res.status(404).json({ error: 'Session not found' })
 
+  const sr = s.score // null or { score, tier, explanation }
   res.json({
     sessionId,
     scenarioId: s.scenarioId || 'default',
     transcript: s.transcript || [],
-    score: s.score ?? null,        // ✅ null until scored; object after scoring
+    score: sr?.score ?? null,
+    tier: sr?.tier ?? null,
+    explanation: sr?.explanation ?? null,
     status: s.status ?? 'in_progress',
   })
 })
