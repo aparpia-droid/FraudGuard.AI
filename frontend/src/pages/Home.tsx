@@ -33,8 +33,8 @@ export default function Home() {
 
     setLoading(true)
     try {
-      const { sessionId } = await startSession({ phoneNumber, scenarioId })
-      navigate(`/live/${sessionId}`)
+      const { sessionId, callPlaced } = await startSession({ phoneNumber, scenarioId })
+      navigate(`/live/${sessionId}`, { state: { demoMode: !callPlaced } })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start session')
     } finally {
