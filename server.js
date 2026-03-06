@@ -940,9 +940,11 @@ const FRONTEND_DIST = path.join(__dirname, 'frontend', 'dist');
 if (fs.existsSync(FRONTEND_DIST)) {
   app.use(express.static(FRONTEND_DIST));
   // SPA fallback: serve index.html for any non-API route
-  app.get('*', (req, res) => {
-    if (!req.url.startsWith('/api') && !req.url.startsWith('/audio') && !req.url.startsWith('/voice') && !req.url.startsWith('/twilio')) {
+  app.use((req, res, next) => {
+    if (req.method === 'GET' && !req.url.startsWith('/api') && !req.url.startsWith('/audio') && !req.url.startsWith('/voice') && !req.url.startsWith('/twilio') && !req.url.startsWith('/ws')) {
       res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
+    } else {
+      next();
     }
   });
   console.log("Serving frontend from", FRONTEND_DIST);
