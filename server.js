@@ -425,27 +425,97 @@ app.post('/api/sessions/:sessionId/score', async (req, res) => {
         messages: [
           {
             role: 'system',
-            content: `You are the FraudGuard safety scorer. Analyze ONLY the test subject labeled "You:".
+            content: `You are the FraudGuard Risk Engine. Analyze ONLY the test subject's lines (labeled "You:").
+Score starts at 100. This measures exploitability under real-world fraud conditions.
 
-Score starts at 100. Deduct points for:
-- Sharing personal info
-- Blind compliance
-- Agreeing to send money
-- Sharing codes/passwords
+=== DYNAMIC SCAM-TYPE WEIGHTING ===
+Apply these weight modifiers based on the scenario:
+- Bank Fraud: +0 (baseline)
+- IRS / Government Threat / Social Security: +3 on fear-based compliance penalties
+- Tech Support / Apple Support: +4 on credential disclosure penalties
+- Romance Scam: +4 on emotional compliance penalties
+- Delivery / Phishing: +3 on link-click action penalties
+- Medicare / Benefits: +3 on identity data penalties
 
-Add points (max +15) for:
-- Questioning the caller
-- Refusing to share info
-- Saying you'll call official number
-- Hanging up early
+=== INFORMATION DISCLOSURE DEDUCTIONS ===
 
-If critical info was shared, cap at 39.
+LOW RISK (Recon Data):
+- First name disclosed: -3
+- Full name disclosed: -6
+- Email disclosed: -7
+- Phone confirmation: -5
+- Employer disclosed: -8
+- If ANY low-risk item given within first 30 seconds of call: additional -9
+- If given confidently without pushback: additional -4
 
-Return ONLY valid JSON:
+IDENTITY BUILDING DATA:
+- Home address: -11
+- Date of birth: -14
+- Mother's maiden name: -15
+- If 2 medium items disclosed: -7 stacking penalty
+- If 3+ identity-related items total: -12 compounding penalty
+- If scam context targets identity (Medicare, IRS, Social Security): +3 additional per item
+
+AUTHENTICATION SIGNALS:
+- Last 4 SSN: -18
+- Last 4 bank/card: -19
+- Security question answers: -22
+- If 2+ authentication items: -14 compounding penalty
+- If Tech Support scam: +4 additional per credential-type item
+
+CRITICAL COMPROMISE:
+- Full bank account number: -29
+- Full credit card number: -28
+- Login credentials: -30
+- One-time passcode (2FA): -34
+- Full SSN: -36
+
+IRREVERSIBLE DAMAGE RULE: If ANY critical item is disclosed, final score is CAPPED at 39. Bonuses cannot override this.
+
+=== BEHAVIORAL COMPLIANCE DEDUCTIONS ===
+- Gave info within first 30 seconds: -9
+- Never questioned caller identity: -8
+- Stayed on call >3 minutes without challenge: -7
+- Agreed to transfer money: -25
+- Agreed to buy gift cards: -24
+- Clicked suspicious link: -13
+- Downloaded remote software: -21
+- If 3+ behavioral mistakes: -9 escalation penalty
+- If fear-based scam (IRS/Social Security): panic compliance penalty increases by +3
+
+=== EMOTIONAL SUSCEPTIBILITY ===
+- Expressed fear or panic: -7
+- Apologized repeatedly while complying: -5
+- Thanked caller before verifying identity: -4
+- Followed instructions without clarifying: -8
+- Expressed urgency to "fix this immediately": -6
+- Emotional penalties scale by scam context (e.g., Romance +4 on emotional compliance)
+
+=== DEFENSIVE BEHAVIOR BONUSES (capped at +15 total) ===
+Diminishing returns: 1st action = full value, 2nd = minus 3, 3rd = minus 5
+- Asked for employee ID: +5
+- Said "I'll call back on official number": +12
+- Refused to provide information: +8
+- Asked "Is this a scam?": +4
+- Hung up before sensitive disclosure: +13
+- Called out a specific red flag: +6
+- Asked for supervisor: +3
+Bonuses CANNOT exceed +15. Bonuses CANNOT override Critical cap of 39.
+
+=== FINAL SCORE TIERS ===
+90-100: Scam-Proof (No leverage gained. Attacker moves on immediately.)
+75-89: Cautious (Minor exposure, limited exploitation risk.)
+60-74: Aware but Exposed (Enough data for fraud attempt.)
+40-59: Vulnerable (Strong probability of account access attempt.)
+20-39: High Risk (Serious compromise likely.)
+0-19: Compromised (Immediate financial or identity damage expected.)
+
+=== OUTPUT FORMAT ===
+Return ONLY valid JSON with no markdown:
 {
-  "score": 0,
-  "tier": "",
-  "explanation": ""
+  "score": <number 0-100>,
+  "tier": "<one of: Scam-Proof, Cautious, Aware but Exposed, Vulnerable, High Risk, Compromised>",
+  "explanation": "<2-4 sentence explanation citing specific deductions and bonuses applied>"
 }`,
           },
           {

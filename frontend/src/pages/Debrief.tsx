@@ -6,47 +6,63 @@ import Card from '../ui/Card'
 import Button from '../ui/Button'
 import Badge from '../ui/Badge'
 
-type BadgeVariant = 'green' | 'yellow' | 'red' | 'neutral'
+type BadgeVariant = 'green' | 'yellow' | 'orange' | 'red' | 'neutral'
 
 function tierVariant(tier: string | null): BadgeVariant {
-  if (tier === 'Safe') return 'green'
-  if (tier === 'Caution') return 'yellow'
-  if (tier === 'Vulnerable') return 'red'
+  if (tier === 'Scam-Proof') return 'green'
+  if (tier === 'Cautious') return 'green'
+  if (tier === 'Aware but Exposed') return 'yellow'
+  if (tier === 'Vulnerable') return 'orange'
   if (tier === 'High Risk') return 'red'
+  if (tier === 'Compromised') return 'red'
   return 'neutral'
 }
 
 /** Keywords that suggest risky disclosure */
-const RISKY_PATTERNS = /ssn|social security|account number|routing|dob|date of birth|birth date|password|pin\b/i
+const RISKY_PATTERNS = /ssn|social security|account number|routing|dob|date of birth|birth date|password|pin\b|credit card|bank account|maiden name|passcode|2fa|otp|verification code|gift card/i
 
-/** Tips by risk tier (matches PRD tiers) */
+/** Tips by risk tier (matches PDF 6-tier system) */
 const TIPS: Record<string, string[]> = {
-  Safe: [
-    'Verify by calling the number on your card or statement.',
+  'Scam-Proof': [
+    'Excellent awareness! Keep verifying callers by hanging up and calling the official number.',
+    "You recognized the red flags immediately — that's exactly what keeps you safe.",
+    'Share your knowledge with family and friends to help protect them too.',
+  ],
+  'Cautious': [
+    'Good instincts! You limited your exposure but shared minor details.',
+    'Even small details like your name or email can be used for targeted follow-up scams.',
     "Legitimate callers won't pressure you to act immediately.",
-    'Banks and IRS rarely initiate contact by phone for sensitive matters.',
   ],
-  Caution: [
-    'Be cautious sharing any personal details over unsolicited calls.',
-    'Hang up and call back using a number from official documents.',
-    "Don't confirm or deny anything; let them send written notice.",
+  'Aware but Exposed': [
+    'You showed some awareness but shared enough data for a fraud attempt.',
+    'Hang up and call back using a number from official documents — never trust caller ID.',
+    "Don't confirm or deny anything; let them send written notice instead.",
   ],
-  Vulnerable: [
+  'Vulnerable': [
+    'You disclosed information that could enable account access attempts.',
     'Never share SSN, DOB, or account numbers over the phone.',
     "Banks won't ask for full account numbers; scammers will.",
-    "Hang up immediately if pressured — real institutions won't do this.",
+    'If pressured, hang up immediately — real institutions will understand.',
   ],
   'High Risk': [
+    'Serious information was compromised — in a real call this could lead to identity theft.',
     'Never share SSN, DOB, or account numbers over the phone.',
-    "Banks won't ask for full account numbers; scammers will.",
     "Hang up immediately if pressured — real institutions won't do this.",
     'Report suspected scams to FTC at reportfraud.ftc.gov.',
+    'Consider a credit freeze if you ever share sensitive data with an unknown caller.',
+  ],
+  'Compromised': [
+    'Critical information was disclosed — in a real scenario, immediate financial damage would be expected.',
+    'If this ever happens in real life: freeze your credit immediately at all three bureaus.',
+    'Change all passwords and enable 2FA on every account.',
+    'Report to FTC at reportfraud.ftc.gov and file a police report.',
+    'Monitor your bank and credit card statements daily for unauthorized charges.',
   ],
 }
 
 function getTips(tier: string | null): string[] {
   if (tier && TIPS[tier]) return TIPS[tier]
-  return TIPS['High Risk']
+  return TIPS['Compromised']
 }
 
 /** Highlight risky transcript lines */
